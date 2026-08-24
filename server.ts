@@ -908,6 +908,21 @@ app.get('/api/room/:roomCode/state', (req, res) => {
   res.json({ success: true, exists: true, room, serverTime: Date.now() });
 });
 
+// Robust helper to extract timestamp from any item (date string, timestamp, createdAt, updatedAt, etc.)
+function getItemTimestamp(item: any): number {
+  if (!item) return 0;
+  if (typeof item.updatedAt === 'number' && !isNaN(item.updatedAt) && item.updatedAt > 0) return item.updatedAt;
+  if (typeof item.createdAt === 'number' && !isNaN(item.createdAt) && item.createdAt > 0) return item.createdAt;
+  if (typeof item.timestamp === 'number' && !isNaN(item.timestamp) && item.timestamp > 0) return item.timestamp;
+  if (typeof item.sentAt === 'number' && !isNaN(item.sentAt) && item.sentAt > 0) return item.sentAt;
+  if (typeof item.date === 'number' && !isNaN(item.date) && item.date > 0) return item.date;
+  if (typeof item.date === 'string' && item.date) {
+    const t = new Date(item.date).getTime();
+    if (!isNaN(t) && t > 0) return t;
+  }
+  return 0;
+}
+
 // Helper to safely merge collections without overwriting items created on other devices
 function mergeCollection<T extends { id?: string; updatedAt?: number; createdAt?: string | number }>(
   currentList: T[] = [],
@@ -932,9 +947,9 @@ function mergeCollection<T extends { id?: string; updatedAt?: number; createdAt?
     if (!existing) {
       map.set(incoming.id, incoming);
     } else {
-      // Merge properties, preferring the newer version
-      const existingTime = Number(existing.updatedAt || (existing as any).date || 0);
-      const incomingTime = Number(incoming.updatedAt || (incoming as any).date || 0);
+      // Merge properties, preferring the newer version based on robust timestamp check
+      const existingTime = getItemTimestamp(existing);
+      const incomingTime = getItemTimestamp(incoming);
       if (incomingTime >= existingTime) {
         map.set(incoming.id, { ...existing, ...incoming });
       } else {

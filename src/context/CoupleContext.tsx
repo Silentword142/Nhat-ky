@@ -130,6 +130,58 @@ export const CoupleContext = createContext<CoupleContextType | undefined>(undefi
 
 const STORAGE_KEY_PREFIX = 'lovesync_cloud_v2_';
 
+// Robust helper to extract timestamp from any item (date string, timestamp, createdAt, updatedAt, etc.)
+export function getItemTimestamp(item: any): number {
+  if (!item) return 0;
+  if (typeof item.updatedAt === 'number' && !isNaN(item.updatedAt) && item.updatedAt > 0) return item.updatedAt;
+  if (typeof item.createdAt === 'number' && !isNaN(item.createdAt) && item.createdAt > 0) return item.createdAt;
+  if (typeof item.timestamp === 'number' && !isNaN(item.timestamp) && item.timestamp > 0) return item.timestamp;
+  if (typeof item.sentAt === 'number' && !isNaN(item.sentAt) && item.sentAt > 0) return item.sentAt;
+  if (typeof item.date === 'number' && !isNaN(item.date) && item.date > 0) return item.date;
+  if (typeof item.date === 'string' && item.date) {
+    const t = new Date(item.date).getTime();
+    if (!isNaN(t) && t > 0) return t;
+  }
+  return 0;
+}
+
+// Universal smart merge for arrays of items (diaries, photos, cards, anniversaries)
+export function smartMergeCollections<T extends { id?: string }>(
+  localList: T[] = [],
+  incomingList: T[] = [],
+  deletedIds: string[] = []
+): T[] {
+  const deletedSet = new Set(deletedIds || []);
+  const map = new Map<string, T>();
+
+  // 1. Add incoming items
+  for (const item of incomingList) {
+    if (item && item.id && !deletedSet.has(item.id)) {
+      map.set(item.id, item);
+    }
+  }
+
+  // 2. Merge local items
+  for (const item of localList) {
+    if (!item || !item.id || deletedSet.has(item.id)) continue;
+
+    const existing = map.get(item.id);
+    if (!existing) {
+      map.set(item.id, item);
+    } else {
+      const incomingTime = getItemTimestamp(existing);
+      const localTime = getItemTimestamp(item);
+      if (localTime >= incomingTime) {
+        map.set(item.id, { ...existing, ...item });
+      } else {
+        map.set(item.id, { ...item, ...existing });
+      }
+    }
+  }
+
+  return Array.from(map.values());
+}
+
 // Unique Device Identity per browser
 const getOrCreateUserId = (): string => {
   try {
@@ -336,6 +388,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const lastKnownServerTimeRef = useRef<number>(0);
   const myProfileRef = useRef<CoupleProfile>(myProfile);
   myProfileRef.current = myProfile;
+  const hasUserMutatedRef = useRef<boolean>(false);
 
   // Google Drive Cloud State
   const [googleUser, setGoogleUser] = useState<User | any>(() => {
@@ -491,77 +544,52 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return;
       }
 
-      const remoteUpdatedAt = data.updatedAt || 0;
-      if (remoteUpdatedAt && remoteUpdatedAt <= lastKnownServerTimeRef.current) {
-        // We already have this or newer state
-        return;
-      }
-      if (remoteUpdatedAt) {
-        lastKnownServerTimeRef.current = remoteUpdatedAt;
-      }
+      const deletedIds = Array.isArray(data.deletedItemIds) ? data.deletedItemIds : [];
 
-      // 1. Sync Diaries (Preserve local items if server restarted with empty data)
+      // 1. Sync Diaries with smart merge
       if (Array.isArray(data.diaries)) {
         setDiaries((prev) => {
-          if (data.diaries.length === 0 && prev.length > 0) {
-            // Server has empty diaries after a cold reboot - push local diaries to restore server
-            setTimeout(() => {
-              broadcastRoomChanges({ diaries: prev });
-            }, 500);
-            return prev;
-          }
+          const merged = smartMergeCollections(prev, data.diaries, deletedIds);
+          merged.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
           try {
-            localStorage.setItem(`${STORAGE_KEY_PREFIX}diaries`, JSON.stringify(data.diaries));
+            localStorage.setItem(`${STORAGE_KEY_PREFIX}diaries`, JSON.stringify(merged));
           } catch {}
-          return data.diaries;
+          return merged;
         });
       }
 
-      // 2. Sync Photos (Preserve local items if server restarted with empty data)
+      // 2. Sync Photos with smart merge
       if (Array.isArray(data.photos)) {
         setPhotos((prev) => {
-          if (data.photos.length === 0 && prev.length > 0) {
-            setTimeout(() => {
-              broadcastRoomChanges({ photos: prev });
-            }, 500);
-            return prev;
-          }
+          const merged = smartMergeCollections(prev, data.photos, deletedIds);
+          merged.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
           try {
-            localStorage.setItem(`${STORAGE_KEY_PREFIX}photos`, JSON.stringify(data.photos));
+            localStorage.setItem(`${STORAGE_KEY_PREFIX}photos`, JSON.stringify(merged));
           } catch {}
-          return data.photos;
+          return merged;
         });
       }
 
-      // 3. Sync Cards (Preserve local items if server restarted with empty data)
+      // 3. Sync Cards with smart merge
       if (Array.isArray(data.cards)) {
         setCards((prev) => {
-          if (data.cards.length === 0 && prev.length > 0) {
-            setTimeout(() => {
-              broadcastRoomChanges({ cards: prev });
-            }, 500);
-            return prev;
-          }
+          const merged = smartMergeCollections(prev, data.cards, deletedIds);
+          merged.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
           try {
-            localStorage.setItem(`${STORAGE_KEY_PREFIX}cards`, JSON.stringify(data.cards));
+            localStorage.setItem(`${STORAGE_KEY_PREFIX}cards`, JSON.stringify(merged));
           } catch {}
-          return data.cards;
+          return merged;
         });
       }
 
-      // 4. Sync Anniversaries (Preserve local items if server restarted with empty data)
+      // 4. Sync Anniversaries with smart merge
       if (Array.isArray(data.anniversaries)) {
         setAnniversaries((prev) => {
-          if (data.anniversaries.length === 0 && prev.length > 0) {
-            setTimeout(() => {
-              broadcastRoomChanges({ anniversaries: prev });
-            }, 500);
-            return prev;
-          }
+          const merged = smartMergeCollections(prev, data.anniversaries, deletedIds);
           try {
-            localStorage.setItem(`${STORAGE_KEY_PREFIX}anniversaries`, JSON.stringify(data.anniversaries));
+            localStorage.setItem(`${STORAGE_KEY_PREFIX}anniversaries`, JSON.stringify(merged));
           } catch {}
-          return data.anniversaries;
+          return merged;
         });
       }
 
@@ -581,7 +609,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
 
       // 5. Sync Settings
-      if (data.settings) {
+      if (data.settings && typeof data.settings === 'object') {
         setSettingsState((prev) => {
           const merged = { ...prev, ...data.settings, roomCode: prev.roomCode };
           try {
@@ -604,7 +632,6 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const nowTime = Date.now();
           setIsPartnerOnline(nowTime - (p.lastActive || 0) < 60000);
         } else {
-          // Partner not currently in payload (offline), keep existing partner profile if available
           setIsPartnerOnline(false);
           setIsPartnerTyping(false);
         }
@@ -637,7 +664,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
       }
 
-      setLastSyncedAt(remoteUpdatedAt || Date.now());
+      setLastSyncedAt(data.updatedAt || Date.now());
       setSyncStatus('connected');
     },
     [myUserId, settings.roomCode]
@@ -658,7 +685,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const profileToSend = overrideProfile || myProfileRef.current;
 
       try {
-        fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/sync`, {
+        const res = await fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -666,18 +693,18 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             profile: profileToSend,
             state: payload,
           }),
-        })
-          .then((res) => res.json())
-          .then((result) => {
-            if (result.success) {
-              setSyncStatus('connected');
-              setLastSyncedAt(nowTime);
-            }
-          })
-          .catch(() => {});
+        });
+        const result = await res.json();
+        if (result.success) {
+          setSyncStatus('connected');
+          setLastSyncedAt(nowTime);
+          if (result.room) {
+            applyIncomingRoomData(result.room, 'sync_ack');
+          }
+        }
       } catch (e) {}
     },
-    [settings.roomCode, myUserId]
+    [settings.roomCode, myUserId, applyIncomingRoomData]
   );
 
   // EXPRESS REST POLLING & INITIAL SYNC (Guarantees Incognito & Cross-Browser 100% sync)
@@ -691,7 +718,9 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const fetchServerState = async () => {
       try {
-        const res = await fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/state`);
+        const res = await fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/state?t=${Date.now()}`, {
+          cache: 'no-store',
+        });
         if (!res.ok) return;
         const data = await res.json();
         if (isMounted && data.success) {
@@ -711,8 +740,8 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // Immediate fetch on mount or room code change
     fetchServerState();
 
-    // Fast polling every 2000ms
-    const interval = setInterval(fetchServerState, 2000);
+    // Fast polling every 1200ms
+    const interval = setInterval(fetchServerState, 1200);
     return () => {
       isMounted = false;
       clearInterval(interval);
@@ -746,7 +775,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return () => clearInterval(interval);
   }, [isAuthenticated, settings.roomCode, myUserId, myProfile]);
 
-  // Google Drive Manual Save
+  // Google Drive Manual / Auto Save (Guarantees freshest authoritative data is saved, never stale device state)
   const saveToGoogleDriveNow = useCallback(async (): Promise<{ success: boolean; error?: string; folderUrl?: string }> => {
     try {
       setIsGoogleDriveSyncing(true);
@@ -760,30 +789,101 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         throw new Error('Chưa đăng nhập Google để kết nối Google Drive.');
       }
 
-      let currentPlaylist: any[] = [];
+      // 1. Fetch freshest authoritative state from server first!
+      let serverRoom: any = null;
       try {
-        const pSaved = localStorage.getItem('lovesync_full_playlist_v3');
-        if (pSaved) currentPlaylist = JSON.parse(pSaved);
-      } catch {}
+        const sRes = await fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/state?t=${Date.now()}`, { cache: 'no-store' });
+        if (sRes.ok) {
+          const sData = await sRes.json();
+          if (sData.success && sData.room) {
+            serverRoom = sData.room;
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch server state before Drive save:', err);
+      }
+
+      // 2. Fetch existing Google Drive file if present to merge
+      let driveExistingData: any = null;
+      try {
+        const dRes = await loadCoupleDataFromDrive(token, settings.roomCode);
+        if (dRes.success && dRes.data) {
+          driveExistingData = dRes.data;
+        }
+      } catch (err) {
+        console.warn('Could not fetch existing Drive backup:', err);
+      }
+
+      const deletedIds = [
+        ...(serverRoom?.deletedItemIds || []),
+        ...(driveExistingData?.deletedItemIds || []),
+      ];
+
+      // Smart merge all 3 sources (Server, Drive, Local) with timestamps
+      const mergedDiaries = smartMergeCollections<DiaryEntry>(
+        diaries,
+        smartMergeCollections<DiaryEntry>(driveExistingData?.diaries || [], serverRoom?.diaries || [], deletedIds),
+        deletedIds
+      );
+      mergedDiaries.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
+
+      const mergedPhotos = smartMergeCollections<PhotoMemory>(
+        photos,
+        smartMergeCollections<PhotoMemory>(driveExistingData?.photos || [], serverRoom?.photos || [], deletedIds),
+        deletedIds
+      );
+      mergedPhotos.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
+
+      const mergedCards = smartMergeCollections<HandwrittenCard>(
+        cards,
+        smartMergeCollections<HandwrittenCard>(driveExistingData?.cards || [], serverRoom?.cards || [], deletedIds),
+        deletedIds
+      );
+      mergedCards.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
+
+      const mergedAnniversaries = smartMergeCollections<AnniversaryEvent>(
+        anniversaries,
+        smartMergeCollections<AnniversaryEvent>(driveExistingData?.anniversaries || [], serverRoom?.anniversaries || [], deletedIds),
+        deletedIds
+      );
+
+      let currentPlaylist = roomPlaylist;
+      if (!currentPlaylist || currentPlaylist.length === 0) {
+        currentPlaylist = serverRoom?.playlist || driveExistingData?.playlist || [];
+      }
 
       let currentAlbums: any[] = [];
       try {
         const aSaved = localStorage.getItem('lovesync_custom_albums_v2');
         if (aSaved) currentAlbums = JSON.parse(aSaved);
       } catch {}
+      if (!currentAlbums || currentAlbums.length === 0) {
+        currentAlbums = serverRoom?.albums || driveExistingData?.albums || [];
+      }
+
+      const mergedSettings = {
+        ...settings,
+        ...(driveExistingData?.settings || {}),
+        ...(serverRoom?.settings || {}),
+        roomCode: settings.roomCode,
+      };
 
       const fullData = {
         myProfile,
-        partnerProfile,
-        settings,
-        diaries,
-        photos,
-        cards,
-        anniversaries,
-        playlist: (roomPlaylist && roomPlaylist.length > 0) ? roomPlaylist : currentPlaylist,
+        partnerProfile: partnerProfile || serverRoom?.profiles?.[Object.keys(serverRoom?.profiles || {}).find((id) => id !== myUserId) || ''] || driveExistingData?.partnerProfile || null,
+        settings: mergedSettings,
+        diaries: mergedDiaries,
+        photos: mergedPhotos,
+        cards: mergedCards,
+        anniversaries: mergedAnniversaries,
+        playlist: currentPlaylist,
         albums: currentAlbums,
+        deletedItemIds: deletedIds,
+        savedAt: new Date().toISOString(),
+        updatedAt: Date.now(),
       };
 
+      // 3. Save strictly freshest dataset to Google Drive
       const result = await saveCoupleDataToDrive(token, settings.roomCode, fullData);
       if (result.success) {
         const timeStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -793,6 +893,30 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           localStorage.setItem(`${STORAGE_KEY_PREFIX}gdrive_folder_url`, result.folderUrl);
         }
         localStorage.setItem(`${STORAGE_KEY_PREFIX}gdrive_last_saved`, timeStr);
+
+        // Update local React state and storage to reflect the merged newest data
+        setDiaries(mergedDiaries);
+        setPhotos(mergedPhotos);
+        setCards(mergedCards);
+        setAnniversaries(mergedAnniversaries);
+        try {
+          localStorage.setItem(`${STORAGE_KEY_PREFIX}diaries`, JSON.stringify(mergedDiaries));
+          localStorage.setItem(`${STORAGE_KEY_PREFIX}photos`, JSON.stringify(mergedPhotos));
+          localStorage.setItem(`${STORAGE_KEY_PREFIX}cards`, JSON.stringify(mergedCards));
+          localStorage.setItem(`${STORAGE_KEY_PREFIX}anniversaries`, JSON.stringify(mergedAnniversaries));
+        } catch {}
+
+        // Also sync the freshest merged data to the server
+        broadcastRoomChanges({
+          diaries: mergedDiaries,
+          photos: mergedPhotos,
+          cards: mergedCards,
+          anniversaries: mergedAnniversaries,
+          playlist: currentPlaylist,
+          albums: currentAlbums,
+          settings: mergedSettings,
+          deletedItemIds: deletedIds,
+        });
 
         // Sync Google Drive metadata to user account on server for cross-device visibility
         saveGoogleDriveStatusService({
@@ -817,7 +941,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } finally {
       setIsGoogleDriveSyncing(false);
     }
-  }, [myProfile, partnerProfile, settings, diaries, photos, cards, anniversaries, authSessionUser, googleUser, googleDriveFolderUrl]);
+  }, [settings.roomCode, myUserId, myProfile, partnerProfile, settings, diaries, photos, cards, anniversaries, roomPlaylist, authSessionUser, googleUser, googleDriveFolderUrl, broadcastRoomChanges]);
 
   // Google Drive Manual Restore / Load
   const loadFromGoogleDriveNow = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
@@ -897,38 +1021,9 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (res?.user && res.accessToken) {
         setGoogleUser(res.user);
         setIsGoogleDriveConnected(true);
-        // Automatically create folder and backup current data
-        const saveRes = await saveCoupleDataToDrive(res.accessToken, settings.roomCode, {
-          myProfile,
-          partnerProfile,
-          settings,
-          diaries,
-          photos,
-          cards,
-          anniversaries,
-        });
-
-        const timeStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        setGoogleDriveLastSavedAt(timeStr);
-        if (saveRes?.folderUrl) {
-          setGoogleDriveFolderUrl(saveRes.folderUrl);
-          localStorage.setItem(`${STORAGE_KEY_PREFIX}gdrive_folder_url`, saveRes.folderUrl);
-        }
-        localStorage.setItem(`${STORAGE_KEY_PREFIX}gdrive_last_saved`, timeStr);
-
-        // Sync Google Drive status with backend
-        saveGoogleDriveStatusService({
-          username: authSessionUser?.username,
-          roomCode: settings.roomCode,
-          gdriveConnected: true,
-          gdriveEmail: res.user.email || '',
-          gdriveDisplayName: res.user.displayName || '',
-          gdriveFolderUrl: saveRes?.folderUrl || '',
-          gdriveLastSaved: timeStr,
-        });
-
-        soundService.playSuccess();
-        return true;
+        // Automatically save latest merged data
+        const saveRes = await saveToGoogleDriveNow();
+        return saveRes.success;
       }
       return false;
     } catch (err: any) {
@@ -937,7 +1032,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } finally {
       setIsGoogleDriveSyncing(false);
     }
-  }, [settings, myProfile, partnerProfile, diaries, photos, cards, anniversaries, authSessionUser]);
+  }, [saveToGoogleDriveNow]);
 
   // Disconnect Google Drive
   const disconnectGoogleDrive = useCallback(async () => {
@@ -951,60 +1046,26 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   }, [authSessionUser, settings.roomCode]);
 
-  // Debounced Auto-sync to Google Drive on data mutations (when connected)
+  // Debounced Auto-sync to Google Drive on actual user data mutations (when connected)
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
   useEffect(() => {
     if (!isGoogleDriveConnected) return;
+    // Only auto-save if user performed a mutation in this active session
+    if (!hasUserMutatedRef.current) return;
 
     if (autoSaveTimerRef.current) {
       clearTimeout(autoSaveTimerRef.current);
     }
 
     autoSaveTimerRef.current = setTimeout(async () => {
-      const token = await getAccessToken();
-      if (!token) return;
-      try {
-        let currentPlaylist: any[] = [];
-        try {
-          const pSaved = localStorage.getItem('lovesync_full_playlist_v3');
-          if (pSaved) currentPlaylist = JSON.parse(pSaved);
-        } catch {}
-
-        let currentAlbums: any[] = [];
-        try {
-          const aSaved = localStorage.getItem('lovesync_custom_albums_v2');
-          if (aSaved) currentAlbums = JSON.parse(aSaved);
-        } catch {}
-
-        const res = await saveCoupleDataToDrive(token, settings.roomCode, {
-          myProfile,
-          partnerProfile,
-          settings,
-          diaries,
-          photos,
-          cards,
-          anniversaries,
-          playlist: (roomPlaylist && roomPlaylist.length > 0) ? roomPlaylist : currentPlaylist,
-          albums: currentAlbums,
-        });
-        if (res.success) {
-          const timeStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-          setGoogleDriveLastSavedAt(timeStr);
-          if (res.folderUrl) {
-            setGoogleDriveFolderUrl(res.folderUrl);
-            localStorage.setItem(`${STORAGE_KEY_PREFIX}gdrive_folder_url`, res.folderUrl);
-          }
-          localStorage.setItem(`${STORAGE_KEY_PREFIX}gdrive_last_saved`, timeStr);
-        }
-      } catch (err) {
-        console.warn('Auto-save to Google Drive notice:', err);
-      }
+      hasUserMutatedRef.current = false;
+      await saveToGoogleDriveNow();
     }, 4000);
 
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     };
-  }, [isGoogleDriveConnected, diaries, photos, cards, anniversaries, roomPlaylist, settings, settings.roomCode, myProfile, partnerProfile]);
+  }, [isGoogleDriveConnected, diaries, photos, cards, anniversaries, roomPlaylist, settings, saveToGoogleDriveNow]);
 
   // Live timer for anniversary countdown
   const [now, setNow] = useState<Date>(new Date());
@@ -1352,6 +1413,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Diary Actions
   const addDiary = useCallback(
     (diary: Omit<DiaryEntry, 'id' | 'createdAt' | 'updatedAt' | 'authorId' | 'authorName' | 'reactions' | 'comments'>) => {
+      hasUserMutatedRef.current = true;
       const nowTime = Date.now();
       const newEntry: DiaryEntry = {
         ...diary,
@@ -1379,6 +1441,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const updateDiary = useCallback(
     (id: string, updates: Partial<DiaryEntry>) => {
+      hasUserMutatedRef.current = true;
       setDiaries((prev) => {
         const next = prev.map((d) => (d.id === id ? { ...d, ...updates, updatedAt: Date.now() } : d));
         try {
@@ -1393,12 +1456,13 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const deleteDiary = useCallback(
     (id: string) => {
+      hasUserMutatedRef.current = true;
       setDiaries((prev) => {
         const next = prev.filter((d) => d.id !== id);
         try {
           localStorage.setItem(`${STORAGE_KEY_PREFIX}diaries`, JSON.stringify(next));
         } catch {}
-        broadcastRoomChanges({ diaries: next });
+        broadcastRoomChanges({ diaries: next, deletedId: id });
         return next;
       });
     },
@@ -1407,12 +1471,14 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const deleteAllDayDiaries = useCallback(
     (date: string) => {
+      hasUserMutatedRef.current = true;
       setDiaries((prev) => {
+        const removedIds = prev.filter((d) => d.date === date).map((d) => d.id);
         const next = prev.filter((d) => d.date !== date);
         try {
           localStorage.setItem(`${STORAGE_KEY_PREFIX}diaries`, JSON.stringify(next));
         } catch {}
-        broadcastRoomChanges({ diaries: next });
+        broadcastRoomChanges({ diaries: next, deletedItemIds: removedIds });
         return next;
       });
     },
@@ -1421,6 +1487,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const addDiaryReaction = useCallback(
     (diaryId: string, emoji: string) => {
+      hasUserMutatedRef.current = true;
       setDiaries((prev) => {
         const next = prev.map((d) => {
           if (d.id !== diaryId) return d;
@@ -1431,7 +1498,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           } else {
             reactions[emoji] = [...currentList, myUserId];
           }
-          return { ...d, reactions };
+          return { ...d, reactions, updatedAt: Date.now() };
         });
         try {
           localStorage.setItem(`${STORAGE_KEY_PREFIX}diaries`, JSON.stringify(next));
@@ -1445,6 +1512,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const addDiaryComment = useCallback(
     (diaryId: string, content: string) => {
+      hasUserMutatedRef.current = true;
       const newComment = {
         id: `cmt_${Date.now()}_${Math.random().toString(36).substring(2, 4)}`,
         authorId: myUserId,
@@ -1455,7 +1523,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       setDiaries((prev) => {
         const next = prev.map((d) =>
-          d.id === diaryId ? { ...d, comments: [...(d.comments || []), newComment] } : d
+          d.id === diaryId ? { ...d, comments: [...(d.comments || []), newComment], updatedAt: Date.now() } : d
         );
         try {
           localStorage.setItem(`${STORAGE_KEY_PREFIX}diaries`, JSON.stringify(next));
@@ -1470,6 +1538,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Photo Actions
   const addPhoto = useCallback(
     (photo: Omit<PhotoMemory, 'id' | 'createdAt' | 'authorId' | 'authorName' | 'likes'>) => {
+      hasUserMutatedRef.current = true;
       const nowTime = Date.now();
       const newPhoto: PhotoMemory = {
         ...photo,
@@ -1495,6 +1564,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const addPhotosBatch = useCallback(
     (photosList: Array<Omit<PhotoMemory, 'id' | 'createdAt' | 'authorId' | 'authorName' | 'likes'>>) => {
       if (!Array.isArray(photosList) || photosList.length === 0) return;
+      hasUserMutatedRef.current = true;
       const nowTime = Date.now();
       const createdPhotos: PhotoMemory[] = photosList.map((p, idx) => ({
         ...p,
@@ -1519,12 +1589,13 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const deletePhoto = useCallback(
     (id: string) => {
+      hasUserMutatedRef.current = true;
       setPhotos((prev) => {
         const next = prev.filter((p) => p.id !== id);
         try {
           localStorage.setItem(`${STORAGE_KEY_PREFIX}photos`, JSON.stringify(next));
         } catch {}
-        broadcastRoomChanges({ photos: next });
+        broadcastRoomChanges({ photos: next, deletedId: id });
         return next;
       });
     },
@@ -1533,6 +1604,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const togglePhotoLike = useCallback(
     (photoId: string) => {
+      hasUserMutatedRef.current = true;
       setPhotos((prev) => {
         const next = prev.map((p) => {
           if (p.id !== photoId) return p;
@@ -1555,6 +1627,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Handwritten Cards
   const sendHandwrittenCard = useCallback(
     (card: Omit<HandwrittenCard, 'id' | 'sentAt' | 'senderId' | 'senderName' | 'isOpened'>) => {
+      hasUserMutatedRef.current = true;
       const nowTime = Date.now();
       const newCard: HandwrittenCard = {
         ...card,
@@ -1580,6 +1653,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const openCard = useCallback(
     (cardId: string) => {
+      hasUserMutatedRef.current = true;
       setCards((prev) => {
         const next = prev.map((c) => (c.id === cardId ? { ...c, isOpened: true, openedAt: Date.now() } : c));
         try {
@@ -1594,12 +1668,13 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const deleteCard = useCallback(
     (cardId: string) => {
+      hasUserMutatedRef.current = true;
       setCards((prev) => {
         const next = prev.filter((c) => c.id !== cardId);
         try {
           localStorage.setItem(`${STORAGE_KEY_PREFIX}cards`, JSON.stringify(next));
         } catch {}
-        broadcastRoomChanges({ cards: next });
+        broadcastRoomChanges({ cards: next, deletedId: cardId });
         return next;
       });
     },
@@ -1609,6 +1684,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Anniversaries
   const addAnniversary = useCallback(
     (event: Omit<AnniversaryEvent, 'id'>) => {
+      hasUserMutatedRef.current = true;
       const newEvent: AnniversaryEvent = {
         ...event,
         id: `anniv_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -1628,6 +1704,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const updateAnniversary = useCallback(
     (id: string, updates: Partial<AnniversaryEvent>) => {
+      hasUserMutatedRef.current = true;
       setAnniversaries((prev) => {
         const next = prev.map((a) => (a.id === id ? { ...a, ...updates } : a));
         try {
@@ -1642,12 +1719,13 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const deleteAnniversary = useCallback(
     (id: string) => {
+      hasUserMutatedRef.current = true;
       setAnniversaries((prev) => {
         const next = prev.filter((a) => a.id !== id);
         try {
           localStorage.setItem(`${STORAGE_KEY_PREFIX}anniversaries`, JSON.stringify(next));
         } catch {}
-        broadcastRoomChanges({ anniversaries: next });
+        broadcastRoomChanges({ anniversaries: next, deletedId: id });
         return next;
       });
     },
