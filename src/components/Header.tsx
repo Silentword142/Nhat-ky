@@ -72,13 +72,13 @@ export const Header: React.FC = () => {
 
   return (
     <header className="relative w-full z-30 pt-3 pb-2 px-3 sm:px-6">
-      <div className={`max-w-5xl mx-auto ${currentTheme.cardBg} rounded-[32px] sm:rounded-[40px] p-4 sm:p-6 shadow-xl shadow-rose-100/40 dark:shadow-none border ${currentTheme.borderSubtle}`}>
+      <div className={`max-w-5xl mx-auto ${currentTheme.cardBg} rounded-[32px] sm:rounded-[40px] p-4 sm:p-6 shadow-xl border ${currentTheme.cardBorder} transition-all duration-300`}>
         {/* Top bar: Security Badge, Sync Status, Theme & Dark Mode */}
         <div className="flex items-center justify-between gap-2 mb-4 text-xs">
           <div className="flex items-center gap-2 flex-wrap">
             {/* E2EE Security status badge */}
             <div
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFF5F7] dark:bg-[#2b1e32] border border-[#FFE4E9] dark:border-[#3d2746] text-[#FF758F] dark:text-[#FF9A9E] font-medium shadow-xs"
+              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full ${currentTheme.accentBadge} font-medium shadow-xs`}
               title="Mã hóa đầu cuối AES-256 kích hoạt. Dữ liệu chỉ giải mã trên thiết bị của hai bạn."
             >
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
@@ -109,7 +109,12 @@ export const Header: React.FC = () => {
 
             {/* Room Code Badge */}
             <div
-              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-200/50 dark:border-rose-800/40 font-mono font-bold text-[11px]"
+              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-mono font-bold text-[11px]"
+              style={{
+                backgroundColor: `${currentTheme.primaryColor}18`,
+                color: currentTheme.primaryColor,
+                border: `1px solid ${currentTheme.primaryColor}35`,
+              }}
               title="Mã phòng kết nối hiện tại"
             >
               <span>Phòng: {settings.roomCode}</span>
@@ -120,7 +125,7 @@ export const Header: React.FC = () => {
               className={`hidden lg:inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-medium text-[11px] ${
                 isGoogleDriveConnected
                   ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/40'
-                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700'
+                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
               }`}
               title={isGoogleDriveConnected ? `Google Drive đã kết nối (Lưu lúc ${googleDriveLastSavedAt || 'gần đây'})` : 'Chưa kết nối Google Drive'}
             >
@@ -135,16 +140,16 @@ export const Header: React.FC = () => {
             <div className="relative">
               <button
                 onClick={() => setShowThemeMenu(!showThemeMenu)}
-                className="px-3.5 py-1.5 rounded-full bg-white/90 dark:bg-zinc-800/90 border border-[#FFE4E9] dark:border-zinc-700 text-[#4A4A4A] dark:text-zinc-200 hover:bg-[#FFF5F7] transition flex items-center gap-1.5 text-xs font-semibold shadow-xs"
+                className={`px-3.5 py-1.5 rounded-full ${currentTheme.cardBg} border ${currentTheme.cardBorder} text-zinc-800 dark:text-zinc-100 hover:bg-black/5 dark:hover:bg-white/10 transition flex items-center gap-1.5 text-xs font-semibold shadow-xs cursor-pointer`}
                 title="Đổi giao diện"
               >
-                <Palette className="w-3.5 h-3.5 text-[#FF758F]" />
+                <Palette className="w-3.5 h-3.5" style={{ color: currentTheme.primaryColor }} />
                 <span className="hidden md:inline">Giao diện</span>
               </button>
 
               {showThemeMenu && (
-                <div className="absolute right-0 mt-2 w-56 p-2 rounded-2xl bg-white dark:bg-zinc-900 shadow-2xl border border-[#FFE4E9] dark:border-zinc-800 z-50">
-                  <div className="text-xs font-bold text-zinc-500 dark:text-zinc-400 px-2 py-1 mb-1">
+                <div className="absolute right-0 mt-2 w-64 p-2 rounded-2xl bg-white dark:bg-zinc-900 shadow-2xl border border-zinc-200 dark:border-zinc-800 z-50 max-h-96 overflow-y-auto">
+                  <div className="text-xs font-bold text-zinc-600 dark:text-zinc-300 px-2 py-1 mb-1">
                     Chọn chủ đề nghệ thuật
                   </div>
                   <div className="grid grid-cols-1 gap-1">
@@ -155,18 +160,18 @@ export const Header: React.FC = () => {
                           updateSettings({ theme: t.id });
                           setShowThemeMenu(false);
                         }}
-                        className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-left text-xs transition ${
+                        className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-left text-xs transition cursor-pointer ${
                           settings.theme === t.id
-                            ? 'bg-gradient-to-r from-[#FF758F] to-[#FF9A9E] text-white font-bold shadow-sm'
-                            : 'hover:bg-[#FFF5F7] dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200'
+                            ? `${t.buttonPrimary} font-bold`
+                            : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-100'
                         }`}
                       >
                         <span className="flex items-center gap-2">
                           <span>{t.emoji}</span>
-                          <span>{t.name}</span>
+                          <span className="truncate">{t.name}</span>
                         </span>
                         <span
-                          className="w-3.5 h-3.5 rounded-full border border-white/50"
+                          className="w-3.5 h-3.5 rounded-full border border-white/50 shrink-0"
                           style={{ backgroundColor: t.primaryColor }}
                         />
                       </button>
@@ -185,7 +190,7 @@ export const Header: React.FC = () => {
               className={`px-3 py-1.5 rounded-full border text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs ${
                 settings.accountEmail || myProfile.email || myProfile.authProvider === 'username' || myProfile.authProvider === 'google'
                   ? 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-300'
-                  : 'bg-gradient-to-r from-rose-500/10 to-pink-500/10 border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-300 hover:bg-rose-100/60'
+                  : `${currentTheme.accentBadge} hover:opacity-90`
               }`}
               title={
                 settings.accountEmail || myProfile.email
@@ -201,7 +206,7 @@ export const Header: React.FC = () => {
                 </>
               ) : (
                 <>
-                  <LogIn className="w-3.5 h-3.5 text-rose-500" />
+                  <LogIn className="w-3.5 h-3.5" style={{ color: currentTheme.primaryColor }} />
                   <span>Đăng Nhập / TK</span>
                 </>
               )}
@@ -211,7 +216,7 @@ export const Header: React.FC = () => {
             {!isInstalled && (
               <button
                 onClick={handleInstallClick}
-                className="px-3.5 py-1.5 rounded-full bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white font-bold text-xs shadow-md shadow-rose-200 dark:shadow-rose-950 flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+                className={`px-3.5 py-1.5 rounded-full ${currentTheme.buttonPrimary} font-bold text-xs shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer`}
                 title="Cài đặt LoveSync ra màn hình máy tính (Desktop)"
               >
                 <MonitorDown className="w-3.5 h-3.5 animate-bounce" />
@@ -225,7 +230,7 @@ export const Header: React.FC = () => {
                 soundService.playPop();
                 updateSettings({ isDarkMode: !settings.isDarkMode });
               }}
-              className="p-2 rounded-full bg-white/90 dark:bg-zinc-800/90 border border-[#FFE4E9] dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-[#FFF5F7] transition shadow-xs"
+              className={`p-2 rounded-full ${currentTheme.cardBg} border ${currentTheme.cardBorder} text-zinc-800 dark:text-zinc-100 hover:bg-black/5 dark:hover:bg-white/10 transition shadow-xs cursor-pointer`}
               title={settings.isDarkMode ? 'Chuyển sang chế độ sáng' : 'Chuyển sang chế độ tối'}
             >
               {settings.isDarkMode ? (
@@ -252,7 +257,10 @@ export const Header: React.FC = () => {
               <img
                 src={myProfile.avatar || DEFAULT_AVATAR_ME}
                 alt={myProfile.name || 'Bạn'}
-                className="w-14 h-14 sm:w-16 sm:h-16 rounded-full object-cover ring-4 ring-[#FF758F]/40 shadow-lg shadow-rose-200/40 dark:shadow-none group-hover:scale-105 transition duration-300"
+                className="w-14 h-14 sm:w-16 sm:h-16 rounded-full object-cover shadow-lg group-hover:scale-105 transition duration-300"
+                style={{
+                  boxShadow: `0 0 0 3px ${currentTheme.primaryColor}55`,
+                }}
               />
               <div className="absolute inset-0 rounded-full bg-black/35 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white">
                 <Camera className="w-5 h-5 drop-shadow-md" />
@@ -268,28 +276,36 @@ export const Header: React.FC = () => {
                     soundService.playPop();
                     setShowProfileModal(true);
                   }}
-                  className="font-serif italic font-bold text-[#333] dark:text-[#f4effa] text-lg sm:text-xl cursor-pointer hover:text-rose-500 transition"
+                  className="font-serif italic font-bold text-zinc-900 dark:text-zinc-50 text-lg sm:text-xl cursor-pointer transition"
+                  style={{ ':hover': { color: currentTheme.primaryColor } } as any}
                   title="Chỉnh sửa tên"
                 >
                   {myProfile.name || 'Bạn'}
                 </h3>
                 {myProfile.nickname && (
-                  <span className="text-xs text-[#FF758F] font-semibold">({myProfile.nickname})</span>
+                  <span className="text-xs font-semibold" style={{ color: currentTheme.primaryColor }}>
+                    ({myProfile.nickname})
+                  </span>
                 )}
               </div>
-              <p className="text-xs text-[#888] dark:text-zinc-400 truncate max-w-[170px] font-cute">
+              <p className="text-xs text-zinc-600 dark:text-zinc-300 truncate max-w-[170px] font-cute">
                 {myProfile.statusText || 'Chưa cập nhật lời nhắn'}
               </p>
-              <div className="flex items-center gap-2 mt-0.5 text-[11px] text-[#999]">
+              <div className="flex items-center gap-2 mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
                 <span>{myProfile.locationEmoji || '📍 Chưa cập nhật'}</span>
                 <button
                   onClick={() => {
                     soundService.playPop();
                     setShowProfileModal(true);
                   }}
-                  className="text-rose-500 hover:underline flex items-center gap-0.5 font-bold cursor-pointer"
+                  className="hover:underline flex items-center gap-0.5 font-bold cursor-pointer"
+                  style={{ color: currentTheme.primaryColor }}
                 >
-                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" /> Đổi ảnh
+                  <span
+                    className="w-1.5 h-1.5 rounded-full animate-pulse"
+                    style={{ backgroundColor: currentTheme.primaryColor }}
+                  />{' '}
+                  Đổi ảnh
                 </button>
               </div>
             </div>
@@ -299,7 +315,7 @@ export const Header: React.FC = () => {
           <div className="flex flex-col items-center justify-center my-1 md:my-0 text-center">
             {/* Days in love badge */}
             <div className="relative group mb-1">
-              <div className="px-5 py-2 rounded-full bg-gradient-to-tr from-[#FF758F] to-[#FF9A9E] text-white shadow-lg shadow-rose-200/60 dark:shadow-rose-950 flex items-center gap-2">
+              <div className={`px-5 py-2 rounded-full ${currentTheme.buttonPrimary} text-white shadow-lg flex items-center gap-2`}>
                 <Heart className="w-4 h-4 fill-white animate-pulse" />
                 <span className="font-serif italic font-black text-base sm:text-lg tracking-wide">
                   {settings.coupleStartDate ? `${daysInLove} NGÀY BÊN NHAU` : '0 NGÀY BÊN NHAU'}
@@ -309,51 +325,53 @@ export const Header: React.FC = () => {
             </div>
 
             {/* Live timer detail */}
-            <div className="text-[11px] text-[#999] dark:text-zinc-400 font-mono flex items-center gap-1">
+            <div className="text-[11px] text-zinc-600 dark:text-zinc-400 font-mono flex items-center gap-1">
               <span>{loveDuration.hours}h</span>:
               <span>{loveDuration.minutes}m</span>:
-              <span className="text-[#FF758F] font-bold">{loveDuration.seconds}s</span>
+              <span className="font-bold" style={{ color: currentTheme.primaryColor }}>
+                {loveDuration.seconds}s
+              </span>
             </div>
 
             {/* Send Heartbeat Pulse Button */}
             <div className="relative mt-2">
               <button
                 onClick={() => setShowHeartMenu(!showHeartMenu)}
-                className="px-4 py-1.5 rounded-full bg-[#FFF5F7] dark:bg-[#2b1e32] hover:bg-[#FFE4E9] dark:hover:bg-[#3d2746] text-[#FF758F] dark:text-[#FF9A9E] text-xs font-bold flex items-center gap-1.5 border border-[#FFE4E9] dark:border-[#3d2746] transition active:scale-95 shadow-xs"
+                className={`px-4 py-1.5 rounded-full ${currentTheme.accentBadge} text-xs font-bold flex items-center gap-1.5 transition active:scale-95 shadow-xs cursor-pointer`}
               >
-                <Radio className="w-3.5 h-3.5 animate-pulse text-[#FF758F]" />
+                <Radio className="w-3.5 h-3.5 animate-pulse" style={{ color: currentTheme.primaryColor }} />
                 Gửi Nhịp Tim 💖
               </button>
 
               {/* Heart Pulse Menu */}
               {showHeartMenu && (
-                <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-64 p-3 rounded-3xl bg-white dark:bg-zinc-900 shadow-2xl border border-[#FFE4E9] dark:border-zinc-800 z-50 text-left">
-                  <div className="text-xs font-bold text-[#4A4A4A] dark:text-zinc-200 mb-2 font-serif italic">
+                <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-64 p-3 rounded-3xl bg-white dark:bg-zinc-900 shadow-2xl border border-zinc-200 dark:border-zinc-800 z-50 text-left">
+                  <div className="text-xs font-bold text-zinc-800 dark:text-zinc-100 mb-2 font-serif italic">
                     Chạm gửi yêu thương tức thì:
                   </div>
 
                   <div className="grid grid-cols-2 gap-1.5 mb-2.5">
                     <button
                       onClick={() => handleSendTap('miss_you')}
-                      className="p-2 rounded-2xl bg-[#FFF5F7] dark:bg-zinc-800 hover:bg-[#FFE4E9] text-xs font-semibold text-[#FF758F] text-left transition flex items-center gap-1.5"
+                      className={`p-2 rounded-2xl ${currentTheme.accentBadge} text-xs font-semibold text-left transition flex items-center gap-1.5 cursor-pointer`}
                     >
                       <span>🥺</span> Nhớ người yêu
                     </button>
                     <button
                       onClick={() => handleSendTap('hug')}
-                      className="p-2 rounded-2xl bg-[#FFF5F7] dark:bg-zinc-800 hover:bg-[#FFE4E9] text-xs font-semibold text-[#FF758F] text-left transition flex items-center gap-1.5"
+                      className={`p-2 rounded-2xl ${currentTheme.accentBadge} text-xs font-semibold text-left transition flex items-center gap-1.5 cursor-pointer`}
                     >
                       <span>🫂</span> Ôm thật chặt
                     </button>
                     <button
                       onClick={() => handleSendTap('kiss')}
-                      className="p-2 rounded-2xl bg-[#FFF5F7] dark:bg-zinc-800 hover:bg-[#FFE4E9] text-xs font-semibold text-[#FF758F] text-left transition flex items-center gap-1.5"
+                      className={`p-2 rounded-2xl ${currentTheme.accentBadge} text-xs font-semibold text-left transition flex items-center gap-1.5 cursor-pointer`}
                     >
                       <span>💋</span> Hôn ngọt ngào
                     </button>
                     <button
                       onClick={() => handleSendTap('heart')}
-                      className="p-2 rounded-2xl bg-[#FFF5F7] dark:bg-zinc-800 hover:bg-[#FFE4E9] text-xs font-semibold text-[#FF758F] text-left transition flex items-center gap-1.5"
+                      className={`p-2 rounded-2xl ${currentTheme.accentBadge} text-xs font-semibold text-left transition flex items-center gap-1.5 cursor-pointer`}
                     >
                       <span>💖</span> Rung động
                     </button>
@@ -365,11 +383,11 @@ export const Header: React.FC = () => {
                       placeholder="Lời nhắn kèm..."
                       value={customPulseMsg}
                       onChange={(e) => setCustomPulseMsg(e.target.value)}
-                      className="flex-1 px-3 py-1.5 text-xs rounded-xl bg-zinc-100 dark:bg-zinc-800 border-0 focus:ring-1 focus:ring-[#FF758F] dark:text-zinc-100"
+                      className="flex-1 px-3 py-1.5 text-xs rounded-xl bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-none"
                     />
                     <button
                       onClick={() => handleSendTap('heart')}
-                      className="p-1.5 rounded-xl bg-[#FF758F] hover:bg-[#FF9A9E] text-white transition"
+                      className={`p-1.5 rounded-xl ${currentTheme.buttonPrimary} text-white transition cursor-pointer`}
                       title="Gửi"
                     >
                       <Send className="w-3.5 h-3.5" />
@@ -387,16 +405,18 @@ export const Header: React.FC = () => {
                 <div className="text-right">
                   <div className="flex items-center justify-end gap-1.5">
                     {partnerProfile.nickname && (
-                      <span className="text-xs text-[#FF758F] font-semibold">({partnerProfile.nickname})</span>
+                      <span className="text-xs font-semibold" style={{ color: currentTheme.primaryColor }}>
+                        ({partnerProfile.nickname})
+                      </span>
                     )}
-                    <h3 className="font-serif italic font-bold text-[#333] dark:text-[#f4effa] text-lg sm:text-xl">
+                    <h3 className="font-serif italic font-bold text-zinc-900 dark:text-zinc-50 text-lg sm:text-xl">
                       {partnerProfile.name || 'Người thương'}
                     </h3>
                   </div>
-                  <p className="text-xs text-[#888] dark:text-zinc-400 truncate max-w-[170px] font-cute">
+                  <p className="text-xs text-zinc-600 dark:text-zinc-300 truncate max-w-[170px] font-cute">
                     {partnerProfile.statusText || 'Chưa cập nhật lời nhắn'}
                   </p>
-                  <div className="flex items-center justify-end gap-2 mt-0.5 text-[11px] text-[#999]">
+                  <div className="flex items-center justify-end gap-2 mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
                     <span className="flex items-center gap-1">
                       {isPartnerOnline ? (
                         <span className="text-emerald-500 flex items-center gap-1 font-medium">
@@ -415,7 +435,10 @@ export const Header: React.FC = () => {
                   <img
                     src={partnerProfile.avatar || DEFAULT_AVATAR_PARTNER}
                     alt={partnerProfile.name || 'Partner'}
-                    className="w-14 h-14 sm:w-16 sm:h-16 rounded-full object-cover ring-4 ring-[#FF9A9E]/40 shadow-lg shadow-rose-200/40 dark:shadow-none"
+                    className="w-14 h-14 sm:w-16 sm:h-16 rounded-full object-cover shadow-lg"
+                    style={{
+                      boxShadow: `0 0 0 3px ${currentTheme.secondaryColor}55`,
+                    }}
                   />
                   <span className="absolute -bottom-1 -left-1 text-lg drop-shadow-sm" title="Cảm xúc">
                     {partnerProfile.mood || '💖'}
@@ -426,11 +449,11 @@ export const Header: React.FC = () => {
               <>
                 <div className="text-right">
                   <div className="flex items-center justify-end gap-1.5">
-                    <h3 className="font-serif italic font-medium text-zinc-500 dark:text-zinc-400 text-base sm:text-lg">
+                    <h3 className="font-serif italic font-medium text-zinc-600 dark:text-zinc-300 text-base sm:text-lg">
                       Chưa kết nối
                     </h3>
                   </div>
-                  <p className="text-xs text-zinc-400 dark:text-zinc-500 truncate max-w-[170px] font-cute">
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate max-w-[170px] font-cute">
                     Chờ ghép đôi cùng người ấy...
                   </p>
                   <div className="flex items-center justify-end gap-2 mt-0.5 text-[11px]">
@@ -446,11 +469,11 @@ export const Header: React.FC = () => {
                     soundService.playPop();
                     setShowAuthModal(true);
                   }}
-                  className="relative group w-14 h-14 sm:w-16 sm:h-16 rounded-full border-2 border-dashed border-rose-300 dark:border-zinc-700 bg-rose-50/50 dark:bg-zinc-800/50 flex flex-col items-center justify-center text-rose-400 hover:bg-rose-100/60 dark:hover:bg-zinc-800 hover:border-rose-400 transition"
+                  className="relative group w-14 h-14 sm:w-16 sm:h-16 rounded-full border-2 border-dashed border-zinc-300 dark:border-zinc-700 bg-black/5 dark:bg-white/5 flex flex-col items-center justify-center hover:opacity-80 transition cursor-pointer"
                   title="Bấm để ghép đôi với người ấy"
                 >
-                  <UserPlus className="w-5 h-5 group-hover:scale-110 transition" />
-                  <span className="text-[9px] font-bold mt-0.5 text-rose-500">Ghép đôi</span>
+                  <UserPlus className="w-5 h-5 group-hover:scale-110 transition" style={{ color: currentTheme.primaryColor }} />
+                  <span className="text-[9px] font-bold mt-0.5" style={{ color: currentTheme.primaryColor }}>Ghép đôi</span>
                 </button>
               </>
             )}

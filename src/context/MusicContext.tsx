@@ -140,17 +140,19 @@ export function sendYouTubeIframeCommand(command: string, args: any[] = []) {
   try {
     const iframe = document.getElementById('lovesync_yt_stream') as HTMLIFrameElement | null;
     if (iframe && iframe.contentWindow) {
-      iframe.contentWindow.postMessage(
-        JSON.stringify({
-          event: 'command',
-          func: command,
-          args: args,
-        }),
-        '*'
-      );
+      const msgObj = {
+        event: 'command',
+        func: command,
+        args: args,
+      };
+      iframe.contentWindow.postMessage(JSON.stringify(msgObj), '*');
+      iframe.contentWindow.postMessage(msgObj, '*');
+
       if (command === 'pauseVideo') {
+        iframe.contentWindow.postMessage('{"event":"command","func":"pauseVideo","args":[]}', '*');
         iframe.contentWindow.postMessage('{"event":"command","func":"pauseVideo","args":""}', '*');
       } else if (command === 'playVideo') {
+        iframe.contentWindow.postMessage('{"event":"command","func":"playVideo","args":[]}', '*');
         iframe.contentWindow.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
       }
     }

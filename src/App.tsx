@@ -51,12 +51,21 @@ const MainAppContent: React.FC = () => {
     <div
       className={`min-h-screen transition-colors duration-500 font-sans relative overflow-x-hidden bg-gradient-to-br ${
         currentTheme.bgGradient
-      } ${settings.isDarkMode ? 'dark text-[#f4effa]' : 'text-[#2d2d2d]'}`}
+      } ${settings.isDarkMode ? 'dark text-zinc-100' : 'text-zinc-900'}`}
     >
-      {/* Artistic Flair Atmospheric Ambient Glows */}
-      <div className="fixed top-[-100px] right-[-100px] w-96 h-96 bg-[#FFD8E4] dark:bg-[#3d1a29]/40 rounded-full blur-3xl opacity-70 pointer-events-none z-0 animate-pulse" style={{ animationDuration: '9s' }} />
-      <div className="fixed bottom-[-60px] left-[-60px] w-80 h-80 bg-[#E0F2FE] dark:bg-[#122b3b]/35 rounded-full blur-3xl opacity-70 pointer-events-none z-0 animate-pulse" style={{ animationDuration: '11s' }} />
-      <div className="fixed top-[45%] left-[-80px] w-64 h-64 bg-[#F3E8FF] dark:bg-[#2c1740]/25 rounded-full blur-3xl opacity-50 pointer-events-none z-0" />
+      {/* Dynamic Themed Atmospheric Ambient Glows */}
+      <div
+        className={`fixed top-[-100px] right-[-100px] w-96 h-96 ${currentTheme.bgAtmosphereOrb1} rounded-full blur-3xl opacity-75 pointer-events-none z-0 animate-pulse`}
+        style={{ animationDuration: '9s' }}
+      />
+      <div
+        className={`fixed bottom-[-60px] left-[-60px] w-80 h-80 ${currentTheme.bgAtmosphereOrb2} rounded-full blur-3xl opacity-75 pointer-events-none z-0 animate-pulse`}
+        style={{ animationDuration: '11s' }}
+      />
+      <div
+        className="fixed top-[45%] left-[-80px] w-64 h-64 rounded-full blur-3xl opacity-40 pointer-events-none z-0"
+        style={{ backgroundColor: currentTheme.glowColor }}
+      />
 
       {/* Romantic Particle Effects */}
       <FloatingHearts enabled={settings.floatingParticles} />
@@ -64,7 +73,7 @@ const MainAppContent: React.FC = () => {
       {/* Real-time Heartbeat / Touch Pulse overlay */}
       <HeartbeatOverlay />
 
-      {/* Couple Music Player Widget & Modal */}
+      {/* Couple Music Player Widget & Modal (3-Level display) */}
       <MusicPlayer />
 
       <div className="relative z-10 flex flex-col min-h-screen">
@@ -94,8 +103,11 @@ const MainAppContent: React.FC = () => {
         </main>
 
         {/* Footer info */}
-        <footer className="text-center py-6 text-xs text-[#999] dark:text-zinc-500 pb-20 sm:pb-8">
-          <p className="font-serif italic text-sm text-[#FF758F] dark:text-[#FF9A9E] tracking-wide font-medium flex items-center justify-center gap-2">
+        <footer className="text-center py-6 text-xs text-zinc-500 dark:text-zinc-400 pb-20 sm:pb-8">
+          <p
+            className="font-serif italic text-sm tracking-wide font-medium flex items-center justify-center gap-2"
+            style={{ color: currentTheme.primaryColor }}
+          >
             <span>✨</span>
             <span>Love you to the Moon and back</span>
             <span>🌙</span>
