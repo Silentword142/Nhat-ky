@@ -1,0 +1,373 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Nunito', 'Be Vietnam Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-cute: 'Quicksand', 'Comfortaa', 'Be Vietnam Pro', sans-serif;
+    --font-handwriting: 'Mali', 'Itim', 'Playpen Sans', 'Pangolin', 'Be Vietnam Pro', cursive;
+    --font-romantic: 'Sriracha', 'Mali', 'Playfair Display', cursive;
+    --font-serif: 'Playfair Display', Georgia, serif;
+    color-scheme: light;
+  }
+
+  :root.dark {
+    color-scheme: dark;
+  }
+  
+  body {
+    font-family: var(--font-cute), var(--font-sans);
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    background-color: #FFF5F7;
+    color: #4A4A4A;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  .dark body,
+  :root.dark body {
+    background-color: #151019;
+    color: #f4effa;
+  }
+
+  /* Cross-platform iOS WebKit and Android form normalization */
+  input, textarea, select {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+  }
+
+  /* Allow text selection inside textareas, inputs and reading sections */
+  input, textarea, [contenteditable="true"], .selectable-text {
+    user-select: text;
+  }
+}
+
+.font-serif {
+  font-family: 'Playfair Display', 'Be Vietnam Pro', Georgia, serif;
+}
+
+.font-handwriting {
+  font-family: 'Caveat', 'Dancing Script', 'Playpen Sans', 'Be Vietnam Pro', cursive, sans-serif;
+}
+
+
+
+
+
+
+
+
+
+
+.font-cute {
+  font-family: 'Quicksand', 'Comfortaa', 'Be Vietnam Pro', sans-serif;
+}
+
+/* 3D Book styling & shadows */
+.book-3d-wrapper {
+  perspective: 1600px;
+}
+
+.book-spine-depth {
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.45) 0%,
+    rgba(0, 0, 0, 0.15) 30%,
+    rgba(255, 255, 255, 0.25) 50%,
+    rgba(0, 0, 0, 0.15) 70%,
+    rgba(0, 0, 0, 0.45) 100%
+  );
+}
+
+.book-page-depth-edge {
+  box-shadow: 
+    3px 0 0 #e6dcd0,
+    6px 0 0 #ded2c4,
+    9px 0 0 #d4c7b8,
+    12px 3px 18px rgba(0, 0, 0, 0.35);
+}
+
+.dark .book-page-depth-edge {
+  box-shadow: 
+    3px 0 0 #2c252a,
+    6px 0 0 #241e22,
+    9px 0 0 #1b1619,
+    12px 3px 18px rgba(0, 0, 0, 0.65);
+}
+
+.book-crease-shadow-left {
+  background: linear-gradient(to right, transparent, rgba(0,0,0,0.08) 90%, rgba(0,0,0,0.2) 100%);
+}
+
+.book-crease-shadow-right {
+  background: linear-gradient(to left, transparent, rgba(0,0,0,0.08) 90%, rgba(0,0,0,0.2) 100%);
+}
+
+/* Custom romantic smooth scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 117, 143, 0.35);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 117, 143, 0.6);
+}
+
+/* Floating animation */
+@keyframes floatSlow {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-8px) rotate(2deg);
+  }
+}
+
+.animate-float-slow {
+  animation: floatSlow 4s ease-in-out infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(255, 117, 143, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(255, 117, 143, 0.6);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 2.5s ease-in-out infinite;
+}
+
+/* Artistic Flair custom classes */
+.artistic-card {
+  border-radius: 32px;
+  box-shadow: 0 16px 36px -8px rgba(255, 117, 143, 0.12), 0 4px 12px -2px rgba(0, 0, 0, 0.04);
+}
+
+.glow-dot-rose {
+  box-shadow: 0 0 8px rgba(255, 117, 143, 0.6);
+}
+
+.glow-dot-sky {
+  box-shadow: 0 0 8px rgba(224, 242, 254, 0.8);
+}
+
+.glow-dot-purple {
+  box-shadow: 0 0 8px rgba(243, 232, 255, 0.8);
+}
+
+/* Paper lined background with exact 36px line alignment for handwriting & typing */
+.paper-lined-exact {
+  background-color: #fffdf9;
+  background-image: 
+    linear-gradient(90deg, transparent 46px, #fca5a5 46px, #fca5a5 48px, transparent 48px),
+    repeating-linear-gradient(
+      transparent,
+      transparent 35px,
+      #ecd5c8 35px,
+      #ecd5c8 36px
+    );
+  background-size: 100% 100%, 100% 36px;
+  background-attachment: local;
+  line-height: 36px;
+}
+
+.dark .paper-lined-exact {
+  background-color: #1a171f;
+  background-image: 
+    linear-gradient(90deg, transparent 46px, #7f1d1d 46px, #7f1d1d 48px, transparent 48px),
+    repeating-linear-gradient(
+      transparent,
+      transparent 35px,
+      #35293d 35px,
+      #35293d 36px
+    );
+  background-size: 100% 100%, 100% 36px;
+  background-attachment: local;
+  line-height: 36px;
+}
+
+/* Paper lined background for handwritten notes */
+.paper-lined {
+  background-color: #fffdfa;
+  background-image: repeating-linear-gradient(
+    transparent,
+    transparent 31px,
+    #ebd5c7 31px,
+    #ebd5c7 32px
+  );
+  background-size: 100% 32px;
+  background-attachment: local;
+  line-height: 32px;
+}
+
+.paper-grid {
+  background-color: #fffbf5;
+  background-image: radial-gradient(#e5cfba 1.2px, transparent 1.2px);
+  background-size: 16px 16px;
+}
+
+/* Dark mode paper variations */
+.dark .paper-lined {
+  background-color: #1c1722;
+  background-image: repeating-linear-gradient(
+    transparent,
+    transparent 31px,
+    #36283d 31px,
+    #36283d 32px
+  );
+  background-size: 100% 32px;
+  line-height: 32px;
+}
+
+.dark .paper-grid {
+  background-color: #1a1620;
+  background-image: radial-gradient(#3d2f44 1.2px, transparent 1.2px);
+}
+
+/* 3D Real Turn.js Book Spread & Page Flip Classes */
+.book-perspective {
+  perspective: 2400px;
+  perspective-origin: 50% 50%;
+}
+
+.turnjs-spine {
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.4) 0%,
+    rgba(0, 0, 0, 0.1) 25%,
+    rgba(255, 255, 255, 0.2) 50%,
+    rgba(0, 0, 0, 0.1) 75%,
+    rgba(0, 0, 0, 0.4) 100%
+  );
+  box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+}
+
+.turnjs-page-shadow-left {
+  box-shadow: inset -15px 0 25px -10px rgba(0, 0, 0, 0.25);
+}
+
+.turnjs-page-shadow-right {
+  box-shadow: inset 15px 0 25px -10px rgba(0, 0, 0, 0.25);
+}
+
+/* Dog ear corner peel effect */
+.dog-ear-corner-right {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 38px;
+  height: 38px;
+  background: linear-gradient(135deg, transparent 50%, rgba(0, 0, 0, 0.08) 51%, #fffdfa 52%, #ecd0c2 100%);
+  box-shadow: -2px -2px 5px rgba(0, 0, 0, 0.15);
+  border-top-left-radius: 6px;
+  transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+  cursor: pointer;
+  z-index: 20;
+}
+
+.dog-ear-corner-right:hover {
+  width: 48px;
+  height: 48px;
+  box-shadow: -4px -4px 10px rgba(0, 0, 0, 0.25);
+}
+
+.dog-ear-corner-left {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 38px;
+  height: 38px;
+  background: linear-gradient(225deg, transparent 50%, rgba(0, 0, 0, 0.08) 51%, #fffdfa 52%, #ecd0c2 100%);
+  box-shadow: 2px -2px 5px rgba(0, 0, 0, 0.15);
+  border-top-right-radius: 6px;
+  transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+  cursor: pointer;
+  z-index: 20;
+}
+
+.dog-ear-corner-left:hover {
+  width: 48px;
+  height: 48px;
+  box-shadow: 4px -4px 10px rgba(0, 0, 0, 0.25);
+}
+
+/* Precise notebook line alignment so text sits directly ON the lines */
+.lined-notebook-text {
+  background-color: #fffdf9;
+  background-image: 
+    linear-gradient(90deg, transparent 48px, #fca5a5 48px, #fca5a5 50px, transparent 50px),
+    repeating-linear-gradient(
+      transparent,
+      transparent 35px,
+      #ebd1c4 35px,
+      #ebd1c4 36px
+    );
+  background-size: 100% 100%, 100% 36px;
+  background-attachment: local;
+  line-height: 36px;
+  font-size: 16px;
+  padding-top: 6px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.dark .lined-notebook-text {
+  background-color: #1a171f;
+  background-image: 
+    linear-gradient(90deg, transparent 48px, #7f1d1d 48px, #7f1d1d 50px, transparent 50px),
+    repeating-linear-gradient(
+      transparent,
+      transparent 35px,
+      #3a2c42 35px,
+      #3a2c42 36px
+    );
+  background-size: 100% 100%, 100% 36px;
+  background-attachment: local;
+  line-height: 36px;
+  font-size: 16px;
+  padding-top: 6px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.font-dancing {
+  font-family: 'Dancing Script', 'Be Vietnam Pro', cursive, sans-serif;
+}
+
+.font-caveat {
+  font-family: 'Caveat', 'Be Vietnam Pro', cursive, sans-serif;
+}
+
+.font-patrick {
+  font-family: 'Patrick Hand', 'Be Vietnam Pro', cursive, sans-serif;
+}
+
+.font-pacifico {
+  font-family: 'Pacifico', 'Be Vietnam Pro', cursive, sans-serif;
+}
+
+.font-playpen {
+  font-family: 'Playpen Sans', 'Be Vietnam Pro', cursive, sans-serif;
+}
+
+.font-comfortaa {
+  font-family: 'Comfortaa', 'Be Vietnam Pro', cursive, sans-serif;
+}
+
+.font-romantic {
+  font-family: 'Dancing Script', 'Playfair Display', cursive, serif;
+}

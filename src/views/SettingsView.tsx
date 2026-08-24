@@ -1,0 +1,1303 @@
+import React, { useState } from 'react';
+import { motion } from 'motion/react';
+import {
+  Palette,
+  Volume2,
+  VolumeX,
+  Sparkles,
+  Share2,
+  Copy,
+  Check,
+  Moon,
+  Sun,
+  User,
+  ShieldCheck,
+  Download,
+  Upload,
+  RefreshCw,
+  Heart,
+  BookHeart,
+  Wifi,
+  WifiOff,
+  CheckCircle2,
+  Radio,
+  Users,
+  FolderSync,
+  ExternalLink,
+  Cloud,
+  CloudOff,
+  LogOut,
+  Trash2,
+  AlertTriangle,
+} from 'lucide-react';
+import { useCouple } from '../context/CoupleContext';
+import { THEMES } from '../utils/theme';
+import { soundService } from '../services/sound';
+import { compressImageFile, CUTE_AVATARS } from '../utils/image';
+import { DEFAULT_AVATAR_ME } from '../services/mockData';
+import { getOAuthClientId, setCustomOAuthClientId, DEFAULT_PROD_CLIENT_ID } from '../services/googleAuth';
+import { AvatarCropModal } from '../components/AvatarCropModal';
+
+export const SettingsView: React.FC = () => {
+  const {
+    myProfile,
+    partnerProfile,
+    settings,
+    updateMyProfile,
+    updateSettings,
+    exportData,
+    importData,
+    syncStatus,
+    lastSyncedAt,
+    isPartnerOnline,
+    partnerAccountInfo,
+    googleUser,
+    isGoogleDriveConnected,
+    isGoogleDriveSyncing,
+    googleDriveLastSavedAt,
+    googleDriveFolderUrl,
+    googleDriveFolderName,
+    connectGoogleDrive,
+    disconnectGoogleDrive,
+    saveToGoogleDriveNow,
+    loadFromGoogleDriveNow,
+    syncNow,
+    setRoomCode,
+    changeCoupleRoomCode,
+    leaveCoupleRoom,
+    linkPartnerAccount,
+    unlinkPartnerAccount,
+    clearAllUserDataAndLogout,
+    clearAllSystemAndLocalData,
+  } = useCouple();
+
+  const currentTheme = THEMES[settings.theme] || THEMES.sakura;
+
+  // Profile states
+  const [name, setName] = useState(myProfile.name);
+  const [nickname, setNickname] = useState(myProfile.nickname || '');
+  const [avatar, setAvatar] = useState(myProfile.avatar);
+  const [statusText, setStatusText] = useState(myProfile.statusText);
+  const [locationEmoji, setLocationEmoji] = useState(myProfile.locationEmoji);
+  const [birthday, setBirthday] = useState(myProfile.birthday || '');
+  const [partnerBirthday, setPartnerBirthday] = useState(settings.partnerBirthday || '');
+  const [isProfileSaved, setIsProfileSaved] = useState(false);
+
+  // Danger Zone / Clear Data States
+  const [showClearModal, setShowClearModal] = useState(false);
+  const [clearType, setClearType] = useState<'device' | 'all'>('all');
+  const [isClearing, setIsClearing] = useState(false);
+  const [clearSuccessMsg, setClearSuccessMsg] = useState('');
+
+  // Avatar Crop Modal state for Settings
+  const [cropModalOpen, setCropModalOpen] = useState(false);
+  const [rawImageForCrop, setRawImageForCrop] = useState<string | null>(null);
+
+  // Keep form values in sync with myProfile updates
+  React.useEffect(() => {
+    setName(myProfile.name);
+    setNickname(myProfile.nickname || '');
+    setAvatar(myProfile.avatar);
+    setStatusText(myProfile.statusText);
+    setLocationEmoji(myProfile.locationEmoji);
+    setBirthday(myProfile.birthday || '');
+  }, [myProfile]);
+
+  React.useEffect(() => {
+    setPartnerBirthday(settings.partnerBirthday || '');
+  }, [settings.partnerBirthday]);
+
+  // Pairing & Live Sync states
+  const [roomCodeInput, setRoomCodeInput] = useState(settings.roomCode);
+  const [hasCopiedCode, setHasCopiedCode] = useState(false);
+  const [hasCopiedLink, setHasCopiedLink] = useState(false);
+  const [isManualSyncing, setIsManualSyncing] = useState(false);
+  const [isChangingRoom, setIsChangingRoom] = useState(false);
+  const [syncSuccessNotice, setSyncSuccessNotice] = useState<string | null>(null);
+  const [driveActionNotice, setDriveActionNotice] = useState<string | null>(null);
+
+  // Partner account linking state
+  const [partnerUserInput, setPartnerUserInput] = useState('');
+  const [isLinking, setIsLinking] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+
+  // Anniversary date setting
+  const [startDateInput, setStartDateInput] = useState(settings.coupleStartDate);
+
+  // Google OAuth Client ID custom configuration
+  const [customClientIdInput, setCustomClientIdInput] = useState(getOAuthClientId());
+  const [isSavedClientId, setIsSavedClientId] = useState(false);
+  const [showOAuthSettings, setShowOAuthSettings] = useState(false);
+
+  const handleSaveCustomClientId = (e: React.FormEvent) => {
+    e.preventDefault();
+    setCustomOAuthClientId(customClientIdInput);
+    setIsSavedClientId(true);
+    setDriveActionNotice('Đã lưu Google OAuth Client ID thành công!');
+    setTimeout(() => setIsSavedClientId(false), 3000);
+    setTimeout(() => setDriveActionNotice(null), 5000);
+  };
+
+  const handleResetClientId = () => {
+    setCustomClientIdInput(DEFAULT_PROD_CLIENT_ID);
+    setCustomOAuthClientId(DEFAULT_PROD_CLIENT_ID);
+    setDriveActionNotice('Đã đặt lại Client ID mặc định!');
+    setTimeout(() => setDriveActionNotice(null), 4000);
+  };
+
+  // Backup & Import
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+
+  // Copy Room Code
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(settings.roomCode);
+    setHasCopiedCode(true);
+    soundService.playPop();
+    setTimeout(() => setHasCopiedCode(false), 2000);
+  };
+
+  // Generate & Copy 1-Click Invite Link
+  const getInviteLink = () => {
+    let origin = window.location.origin;
+    // If in dev environment, convert to shared preview url so partner can access publicly
+    if (origin.includes('ais-dev-')) {
+      origin = origin.replace('ais-dev-', 'ais-pre-');
+    }
+    const pathname = window.location.pathname.replace(/\/+$/, '');
+    return `${origin}${pathname || ''}?room=${encodeURIComponent(settings.roomCode)}`;
+  };
+
+  const handleCopyInviteLink = () => {
+    soundService.playSparkle();
+    navigator.clipboard.writeText(getInviteLink());
+    setHasCopiedLink(true);
+    setSyncSuccessNotice('Đã sao chép link ghép đôi! Hãy gửi link này cho người yêu.');
+    setTimeout(() => {
+      setHasCopiedLink(false);
+      setSyncSuccessNotice(null);
+    }, 4000);
+  };
+
+  // Save Room Code / Switch Room (WITH AUTO-MIGRATION OF PARTNER & DATA)
+  const handleSaveRoomCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanCode = roomCodeInput.trim().toUpperCase();
+    if (!cleanCode) return;
+
+    try {
+      setIsChangingRoom(true);
+      await changeCoupleRoomCode(cleanCode);
+      soundService.playSparkle();
+      setSyncSuccessNotice(`Đã đổi sang mã phòng "${cleanCode}"! Hệ thống đã tự động chuyển dữ liệu và đồng bộ tài khoản người yêu sang phòng mới.`);
+      setTimeout(() => setSyncSuccessNotice(null), 4500);
+    } catch (err: any) {
+      setSyncSuccessNotice(`Lỗi: ${err.message || 'Không thể đổi mã phòng'}`);
+    } finally {
+      setIsChangingRoom(false);
+    }
+  };
+
+  // Link Partner Account
+  const handleLinkPartner = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = partnerUserInput.trim().toLowerCase();
+    if (!clean) return;
+
+    try {
+      setIsLinking(true);
+      setLinkError(null);
+      await linkPartnerAccount(clean);
+      setPartnerUserInput('');
+      setSyncSuccessNotice(`Đã liên kết thành công với tài khoản "@${clean}"! Hai bạn sẽ luôn đồng bộ mã phòng cùng nhau.`);
+      setTimeout(() => setSyncSuccessNotice(null), 4500);
+    } catch (err: any) {
+      setLinkError(err.message || 'Không thể liên kết tài khoản.');
+    } finally {
+      setIsLinking(false);
+    }
+  };
+
+  // Leave current couple room and create a clean private room
+  const handleLeaveRoom = async () => {
+    if (!window.confirm('Bạn có muốn rời khỏi phòng này và trở về phòng riêng không?')) return;
+    try {
+      setIsChangingRoom(true);
+      await leaveCoupleRoom();
+      soundService.playPop();
+      setSyncSuccessNotice('Đã rời khỏi phòng và chuyển về phòng riêng biệt.');
+      setTimeout(() => setSyncSuccessNotice(null), 3500);
+    } catch (err: any) {
+      setSyncSuccessNotice(`Lỗi: ${err.message || 'Không thể rời phòng'}`);
+    } finally {
+      setIsChangingRoom(false);
+    }
+  };
+
+  // Unlink Partner
+  const handleUnlinkPartner = async () => {
+    if (!window.confirm('Bạn có chắc chắn muốn hủy liên kết với tài khoản này không? Sau khi hủy, đối phương sẽ được gỡ khỏi Header và bạn sẽ chuyển về phòng riêng.')) return;
+    try {
+      await unlinkPartnerAccount();
+      setSyncSuccessNotice('Đã hủy liên kết thành công! Đối phương đã được gỡ khỏi Header và chuyển về phòng riêng biệt.');
+      setTimeout(() => setSyncSuccessNotice(null), 4000);
+    } catch (err) {}
+  };
+
+  // Google Drive Handlers
+  const handleConnectDrive = async () => {
+    try {
+      setDriveActionNotice('Đang mở cửa sổ đăng nhập Google Drive...');
+      const ok = await connectGoogleDrive();
+      if (ok) {
+        setDriveActionNotice(`Đã kết nối Google Drive và sao lưu tự động vào thư mục "${googleDriveFolderName}"! 🎉`);
+        setTimeout(() => setDriveActionNotice(null), 5000);
+      } else {
+        setDriveActionNotice('Cửa sổ Google đã đóng hoặc chưa hoàn tất cấp quyền. Bạn có thể nhấn lại để thử lại nhé.');
+        setTimeout(() => setDriveActionNotice(null), 6000);
+      }
+    } catch (err: any) {
+      console.error('Drive connection error:', err);
+      if (
+        err?.code === 'auth/popup-closed-by-user' ||
+        err?.code === 'auth/cancelled-popup-request' ||
+        err?.message?.includes('popup-closed-by-user')
+      ) {
+        setDriveActionNotice('Cửa sổ đăng nhập Google đã đóng. Nhấn "Kết Nối Google Drive Ngay" để đăng nhập lại.');
+      } else if (err?.code === 'auth/popup-blocked') {
+        setDriveActionNotice('Trình duyệt đã chặn cửa sổ bật lên (popup). Vui lòng cho phép popup trong thanh địa chỉ và thử lại.');
+      } else {
+        setDriveActionNotice(`Lỗi kết nối: ${err.message || 'Không thể kết nối Google Drive. Vui lòng thử lại.'}`);
+      }
+      setTimeout(() => setDriveActionNotice(null), 7000);
+    }
+  };
+
+  const handleDisconnectDrive = async () => {
+    if (!window.confirm('Bạn có muốn ngắt kết nối Google Drive không?')) return;
+    await disconnectGoogleDrive();
+    setDriveActionNotice('Đã ngắt kết nối Google Drive.');
+    setTimeout(() => setDriveActionNotice(null), 3000);
+  };
+
+  const handleSaveToDrive = async () => {
+    const res = await saveToGoogleDriveNow();
+    if (res.success) {
+      setDriveActionNotice(`Đã lưu toàn bộ dữ liệu tình yêu vào thư mục "${googleDriveFolderName}" trên Google Drive!`);
+      setTimeout(() => setDriveActionNotice(null), 5000);
+    } else {
+      setDriveActionNotice(`Lỗi lưu Drive: ${res.error}`);
+    }
+  };
+
+  const handleLoadFromDrive = async () => {
+    if (!window.confirm('Bạn có muốn tải và khôi phục dữ liệu từ Google Drive không? (Dữ liệu trên máy sẽ được cập nhật)')) return;
+    const res = await loadFromGoogleDriveNow();
+    if (res.success) {
+      setDriveActionNotice('Đã khôi phục dữ liệu từ Google Drive thành công! 💖');
+      setTimeout(() => setDriveActionNotice(null), 4000);
+    } else {
+      setDriveActionNotice(`Lỗi tải: ${res.error}`);
+    }
+  };
+
+  // Manual Instant Sync
+  const handleManualSync = async () => {
+    setIsManualSyncing(true);
+    soundService.playPop();
+    const ok = await syncNow();
+    setIsManualSyncing(false);
+    if (ok) {
+      setSyncSuccessNotice('Đã đồng bộ toàn bộ dữ liệu thời gian thực thành công!');
+      setTimeout(() => setSyncSuccessNotice(null), 3500);
+    }
+  };
+
+  // Save Couple Anniversary Date
+  const handleSaveAnniversary = (e: React.FormEvent) => {
+    e.preventDefault();
+    soundService.playPop();
+    updateSettings({ coupleStartDate: startDateInput });
+    setSyncSuccessNotice('Đã lưu ngày bắt đầu yêu!');
+    setTimeout(() => setSyncSuccessNotice(null), 3000);
+  };
+
+  // Handle Avatar file upload with cropping
+  const handleAvatarFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    soundService.playPop();
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const result = event.target?.result as string;
+      if (result) {
+        setRawImageForCrop(result);
+        setCropModalOpen(true);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const handleCropComplete = (croppedDataUrl: string) => {
+    setAvatar(croppedDataUrl);
+    setCropModalOpen(false);
+    setRawImageForCrop(null);
+    // Immediately update profile avatar as well for quick sync
+    updateMyProfile({ avatar: croppedDataUrl });
+  };
+
+  // Save Profile
+  const handleSaveProfile = (e: React.FormEvent) => {
+    e.preventDefault();
+    soundService.playSparkle();
+    updateMyProfile({
+      name: name.trim() || 'Người yêu',
+      nickname: nickname.trim(),
+      avatar,
+      statusText: statusText.trim(),
+      locationEmoji: locationEmoji.trim(),
+      birthday: birthday || undefined,
+    });
+
+    if (partnerBirthday !== settings.partnerBirthday) {
+      updateSettings({
+        partnerBirthday: partnerBirthday || undefined,
+      });
+    }
+
+    setIsProfileSaved(true);
+    setSyncSuccessNotice('Đã cập nhật hồ sơ và ngày sinh nhật vào hệ thống sự kiện!');
+    setTimeout(() => {
+      setIsProfileSaved(false);
+      setSyncSuccessNotice(null);
+    }, 3500);
+  };
+
+  // Export JSON backup
+  const handleExport = () => {
+    soundService.playSparkle();
+    const dataStr = exportData();
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `lovesync-backup-${settings.roomCode}-${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Import JSON backup
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const success = importData(text);
+        if (success) {
+          soundService.playSparkle();
+          setImportStatus('Khôi phục dữ liệu thành công! 💖');
+        } else {
+          setImportStatus('Tệp không hợp lệ.');
+        }
+      } catch {
+        setImportStatus('Lỗi khi đọc tệp sao lưu.');
+      }
+      setTimeout(() => setImportStatus(null), 3000);
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <div className="w-full max-w-5xl mx-auto px-3 sm:px-6 pb-24 sm:pb-12 space-y-6">
+      {/* 1. REAL-TIME INSTANT WEB SYNC (LIVE COUPLE ROOM) */}
+      <div className={`rounded-[32px] ${currentTheme.cardBg} border ${currentTheme.borderSubtle} p-6 sm:p-8 shadow-xl shadow-rose-100/30 dark:shadow-none`}>
+        <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-rose-500 via-pink-500 to-rose-400 flex items-center justify-center text-white shadow-md shadow-rose-200 dark:shadow-none">
+              <Radio className="w-6 h-6 animate-pulse" />
+            </div>
+            <div>
+              <h3 className="text-lg sm:text-xl font-serif italic font-bold text-[#333] dark:text-[#f4effa]">
+                Đồng Bộ Trực Tiếp & Tức Thì (Real-Time Web Sync)
+              </h3>
+              <p className="text-xs text-[#888] dark:text-zinc-400 font-cute">
+                Tự động đồng bộ nhật ký, ảnh kỷ niệm, thiệp viết tay ngay lập tức giữa 2 thiết bị
+              </p>
+            </div>
+          </div>
+
+          {/* Connection Status Pill */}
+          <div className="flex items-center gap-2">
+            <div
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full font-medium text-xs shadow-xs ${
+                syncStatus === 'connected'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300'
+              }`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  syncStatus === 'connected' ? 'bg-emerald-500 animate-ping' : 'bg-amber-500'
+                }`}
+              />
+              <span className="font-bold">
+                {syncStatus === 'connected' ? '🟢 Đang đồng bộ trực tiếp' : '🟡 Đang kết nối...'}
+              </span>
+            </div>
+
+            {/* Partner Status Pill */}
+            <div
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold ${
+                isPartnerOnline
+                  ? 'bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-600 dark:text-rose-300'
+                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>{isPartnerOnline ? 'Người yêu đang online 💑' : 'Người yêu chưa mở app'}</span>
+            </div>
+          </div>
+        </div>
+
+        {syncSuccessNotice && (
+          <div className="mb-5 p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs flex items-center gap-2 font-cute">
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
+            <span>{syncSuccessNotice}</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {/* Room Code & 1-Click Secret Link Card */}
+          <div className="p-5 sm:p-6 rounded-3xl bg-[#FFF5F7] dark:bg-zinc-800/40 border border-[#FFE4E9] dark:border-zinc-700/60 flex flex-col justify-between space-y-4">
+            <div>
+              <div className="text-xs font-bold text-[#FF758F] uppercase tracking-wider mb-2 flex items-center justify-between">
+                <span>Mã Phòng Của Hai Bạn</span>
+                <span className="text-[10px] text-zinc-400 normal-case font-normal">Tự động kết nối tức thì</span>
+              </div>
+
+              <div className="flex items-center gap-2 mb-3">
+                <div className="flex-1 px-4 py-3 rounded-2xl bg-white dark:bg-zinc-900 border border-[#FFE4E9] dark:border-zinc-700 font-mono text-lg font-extrabold text-[#FF758F] text-center tracking-widest shadow-inner">
+                  {settings.roomCode}
+                </div>
+                <button
+                  onClick={handleCopyCode}
+                  className="px-4 py-3 rounded-2xl bg-gradient-to-r from-[#FF758F] to-[#FF9A9E] hover:from-[#ff607e] hover:to-[#ff8d92] text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-rose-200 dark:shadow-rose-950 transition active:scale-95 whitespace-nowrap cursor-pointer"
+                >
+                  {hasCopiedCode ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  <span>{hasCopiedCode ? 'Đã chép' : 'Sao chép mã'}</span>
+                </button>
+              </div>
+
+              {/* 1-Click Secret Link for Partner */}
+              <div className="pt-3 border-t border-[#FFE4E9] dark:border-zinc-700/50">
+                <div className="text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-2 flex items-center gap-1 font-cute">
+                  <Sparkles className="w-3.5 h-3.5 text-[#FF758F]" />
+                  <span>Link Ghép Đôi 1-Chạm (Gửi Cho Người Yêu)</span>
+                </div>
+                <button
+                  onClick={handleCopyInviteLink}
+                  className="w-full py-3 px-4 rounded-2xl bg-white dark:bg-zinc-900 border-2 border-dashed border-[#FF758F] hover:bg-rose-50/50 text-[#FF758F] dark:text-[#FF9A9E] font-bold text-xs flex items-center justify-center gap-2 transition active:scale-95 shadow-xs cursor-pointer"
+                >
+                  {hasCopiedLink ? <Check className="w-4 h-4 text-emerald-500" /> : <Share2 className="w-4 h-4" />}
+                  <span>{hasCopiedLink ? '✅ Đã sao chép link ghép đôi!' : '🔗 Sao Chép Link Ghép Đôi Tức Thì'}</span>
+                </button>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-[#888] dark:text-zinc-400 leading-relaxed font-cute">
+              💡 <strong>Rất đơn giản:</strong> Bạn chỉ cần bấm nút <strong>"Sao Chép Link Ghép Đôi"</strong> và gửi link cho đối phương. Người ấy mở link là 2 máy sẽ tự động kết nối chung 1 phòng và đồng bộ ngay lập tức!
+            </p>
+          </div>
+
+          {/* Change Room Code & Sync Status */}
+          <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 flex flex-col justify-between space-y-4">
+            <form onSubmit={handleSaveRoomCode} className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1.5 font-cute">
+                  Đổi Mã Phòng Mới (Tự Chuyển Cả Dữ Liệu & Người Yêu)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={roomCodeInput}
+                    onChange={(e) => setRoomCodeInput(e.target.value.toUpperCase())}
+                    placeholder="Ví dụ: LOVE99, PHONG-ANH-EM"
+                    className="flex-1 px-4 py-2.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs font-mono font-bold text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-[#FF758F] outline-hidden uppercase"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isChangingRoom}
+                    className="px-4 py-2.5 rounded-2xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs shadow-md shadow-rose-200 dark:shadow-none transition active:scale-95 cursor-pointer whitespace-nowrap disabled:opacity-50"
+                  >
+                    {isChangingRoom ? 'Đang đổi...' : 'Đổi Phòng 🚀'}
+                  </button>
+                </div>
+                <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium block mt-1.5 leading-snug font-cute">
+                  ✨ Khi bạn đổi mã phòng, tài khoản của người yêu và toàn bộ ảnh/nhật ký sẽ tự động chuyển sang mã phòng mới cùng bạn!
+                </span>
+              </div>
+            </form>
+
+            <div className="pt-3 border-t border-zinc-100 dark:border-zinc-800 space-y-3">
+              <div className="flex items-center justify-between text-xs font-cute text-zinc-600 dark:text-zinc-400">
+                <span>Lần đồng bộ gần nhất:</span>
+                <span className="font-bold text-zinc-800 dark:text-zinc-200">
+                  {lastSyncedAt ? new Date(lastSyncedAt).toLocaleTimeString('vi-VN') : 'Vừa xong'}
+                </span>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleManualSync}
+                  disabled={isManualSyncing}
+                  className="flex-1 py-2.5 px-4 rounded-2xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 font-bold text-xs flex items-center justify-center gap-2 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isManualSyncing ? 'animate-spin' : ''}`} />
+                  <span>{isManualSyncing ? 'Đang kiểm tra...' : 'Đồng Bộ Lại (Sync Now)'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleLeaveRoom}
+                  disabled={isChangingRoom}
+                  className="px-3.5 py-2.5 rounded-2xl bg-rose-50 hover:bg-rose-100 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-rose-600 dark:text-rose-400 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer border border-rose-200/60 dark:border-zinc-700 disabled:opacity-50"
+                  title="Rời khỏi phòng ghép đôi hiện tại và chuyển sang phòng riêng"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Rời phòng</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* PARTNER 1-TO-1 ACCOUNT LINKING CARD */}
+        <div className="mt-5 p-5 rounded-3xl bg-gradient-to-br from-rose-50/80 via-pink-50/40 to-white dark:from-zinc-800/80 dark:to-zinc-900 border border-rose-200/70 dark:border-zinc-700">
+          <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xl">💑</span>
+              <h4 className="text-sm font-bold text-zinc-800 dark:text-zinc-100 font-cute">
+                Liên Kết Tài Khoản Người Yêu (Couple Account Pairing)
+              </h4>
+            </div>
+            {partnerAccountInfo?.username ? (
+              <span className="px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-xs font-bold border border-emerald-300 dark:border-emerald-800 flex items-center gap-1">
+                <Check className="w-3.5 h-3.5" /> Đã ghép đôi: @{partnerAccountInfo.username}
+              </span>
+            ) : (
+              <span className="px-3 py-1 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 text-xs font-bold border border-amber-300 dark:border-amber-800">
+                Chưa liên kết tài khoản đối phương
+              </span>
+            )}
+          </div>
+
+          {partnerAccountInfo?.username ? (
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-2xl bg-white dark:bg-zinc-800/70 border border-rose-100 dark:border-zinc-700/60 shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-rose-400 to-pink-400 flex items-center justify-center text-white font-bold text-lg shadow-sm">
+                  {partnerAccountInfo.displayName?.[0]?.toUpperCase() || partnerAccountInfo.username[0].toUpperCase()}
+                </div>
+                <div>
+                  <div className="font-bold text-sm text-zinc-800 dark:text-zinc-100 flex items-center gap-1.5">
+                    <span>{partnerAccountInfo.displayName || partnerAccountInfo.username}</span>
+                    <span className="text-xs text-rose-500 font-mono">(@{partnerAccountInfo.username})</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-cute">
+                    💖 Hai tài khoản đã liên kết vĩnh viễn. Khi một trong hai người đổi mã phòng, đối phương sẽ tự động được chuyển theo!
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleUnlinkPartner}
+                className="px-3 py-1.5 text-xs text-zinc-500 hover:text-rose-600 dark:text-zinc-400 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-zinc-700 rounded-xl transition cursor-pointer self-end sm:self-center"
+              >
+                Hủy liên kết
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handleLinkPartner} className="space-y-2">
+              <p className="text-xs text-zinc-600 dark:text-zinc-300 font-cute leading-relaxed">
+                Nhập tên tài khoản của người yêu để liên kết 1-1. Sau khi liên kết, mọi thay đổi về mã phòng sẽ luôn đồng bộ 2 máy cùng nhau.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={partnerUserInput}
+                  onChange={(e) => {
+                    setPartnerUserInput(e.target.value);
+                    if (linkError) setLinkError(null);
+                  }}
+                  placeholder="Nhập tên tài khoản của người yêu (ví dụ: hoanglong, thunhi)"
+                  className="flex-1 px-4 py-2.5 rounded-2xl bg-white dark:bg-zinc-800 border border-rose-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-[#FF758F] outline-hidden lowercase"
+                />
+                <button
+                  type="submit"
+                  disabled={isLinking || !partnerUserInput.trim()}
+                  className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white font-bold text-xs shadow-md shadow-rose-200 dark:shadow-none transition active:scale-95 cursor-pointer whitespace-nowrap disabled:opacity-50"
+                >
+                  {isLinking ? 'Đang liên kết...' : 'Liên Kết Ngay 💑'}
+                </button>
+              </div>
+              {linkError && (
+                <p className="text-xs text-rose-600 dark:text-rose-400 font-cute font-medium">
+                  ⚠️ {linkError}
+                </p>
+              )}
+            </form>
+          )}
+        </div>
+
+        {/* GOOGLE DRIVE DEDICATED FOLDER CLOUD STORAGE CARD */}
+        <div className="mt-5 p-5 rounded-3xl bg-gradient-to-br from-blue-50/80 via-indigo-50/30 to-white dark:from-zinc-800/80 dark:to-zinc-900 border border-blue-200/80 dark:border-blue-900/50">
+          <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-blue-100 dark:bg-blue-950 flex items-center justify-center text-blue-600 dark:text-blue-400 shadow-xs">
+                <FolderSync className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-zinc-800 dark:text-zinc-100 font-cute flex items-center gap-1.5">
+                  <span>Lưu Trữ Google Drive (Thư Mục Riêng)</span>
+                  <span className="px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-mono font-semibold">
+                    Google Drive API
+                  </span>
+                </h4>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-cute">
+                  Tất cả nhật ký, ảnh, thư tình và cài đặt được lưu vào thư mục riêng <span className="font-semibold text-blue-600 dark:text-blue-400 font-mono">"{googleDriveFolderName}"</span> trên Google Drive của bạn.
+                </p>
+              </div>
+            </div>
+
+            {isGoogleDriveConnected ? (
+              <span className="px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-xs font-bold border border-emerald-300 dark:border-emerald-800 flex items-center gap-1">
+                <Check className="w-3.5 h-3.5" /> Đã kết nối: {googleUser?.email || 'Google Drive'}
+              </span>
+            ) : (
+              <span className="px-3 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 text-xs font-bold border border-zinc-300 dark:border-zinc-700 flex items-center gap-1">
+                <CloudOff className="w-3.5 h-3.5" /> Chưa kết nối Drive
+              </span>
+            )}
+          </div>
+
+          {driveActionNotice && (
+            <motion.div
+              initial={{ opacity: 0, y: -5 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-3 p-3 rounded-2xl bg-blue-100/90 dark:bg-blue-950/70 border border-blue-300 dark:border-blue-800 text-blue-900 dark:text-blue-200 text-xs font-cute font-medium flex items-center gap-2"
+            >
+              <Sparkles className="w-4 h-4 text-blue-500 shrink-0" />
+              <span>{driveActionNotice}</span>
+            </motion.div>
+          )}
+
+          {isGoogleDriveConnected ? (
+            <div className="space-y-3">
+              <div className="p-3.5 rounded-2xl bg-white dark:bg-zinc-800/80 border border-blue-100 dark:border-zinc-700 text-xs space-y-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <Cloud className="w-4 h-4 text-blue-500" />
+                    <span className="text-zinc-700 dark:text-zinc-300 font-medium">
+                      Trạng thái tự động đồng bộ: <span className="text-emerald-600 dark:text-emerald-400 font-bold">Đang bật (Tự lưu sau mỗi thay đổi)</span>
+                    </span>
+                  </div>
+                  {googleDriveLastSavedAt && (
+                    <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      Lần lưu gần nhất: <strong className="text-zinc-700 dark:text-zinc-300">{googleDriveLastSavedAt}</strong>
+                    </span>
+                  )}
+                </div>
+
+                {googleDriveFolderUrl && (
+                  <div className="pt-1">
+                    <a
+                      href={googleDriveFolderUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 font-bold hover:underline"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Mở thư mục lưu trữ trên Google Drive</span>
+                    </a>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleSaveToDrive}
+                  disabled={isGoogleDriveSyncing}
+                  className="px-4 py-2.5 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-sm flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                >
+                  <Download className={`w-3.5 h-3.5 ${isGoogleDriveSyncing ? 'animate-spin' : ''}`} />
+                  <span>{isGoogleDriveSyncing ? 'Đang lưu...' : 'Lưu Dữ Liệu Lên Google Drive Ngay'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleLoadFromDrive}
+                  disabled={isGoogleDriveSyncing}
+                  className="px-4 py-2.5 rounded-2xl bg-white dark:bg-zinc-800 hover:bg-blue-50 dark:hover:bg-zinc-700 border border-blue-200 dark:border-zinc-700 text-blue-700 dark:text-blue-300 font-bold text-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Tải / Khôi Phục Từ Google Drive</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDisconnectDrive}
+                  className="px-3 py-2 text-xs text-zinc-500 hover:text-rose-600 dark:text-zinc-400 dark:hover:text-rose-400 rounded-xl transition cursor-pointer flex items-center gap-1 ml-auto"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Ngắt kết nối</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="p-4 rounded-2xl bg-white dark:bg-zinc-800/70 border border-blue-100 dark:border-zinc-700/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="text-xs text-zinc-600 dark:text-zinc-300 font-cute space-y-1">
+                <p className="font-semibold text-zinc-800 dark:text-zinc-100">
+                  Chuyển toàn bộ lưu trữ sang Google Drive cá nhân
+                </p>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  Dữ liệu được lưu trong thư mục riêng của bạn, không phụ thuộc vào Firebase, không lo hết hạn mức!
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleConnectDrive}
+                disabled={isGoogleDriveSyncing}
+                className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-xs shadow-md shadow-blue-200 dark:shadow-none transition active:scale-95 cursor-pointer whitespace-nowrap disabled:opacity-50 flex items-center gap-2"
+              >
+                <Cloud className={`w-4 h-4 ${isGoogleDriveSyncing ? 'animate-spin' : ''}`} />
+                <span>{isGoogleDriveSyncing ? 'Đang kết nối...' : 'Kết Nối Google Drive Ngay 📁'}</span>
+              </button>
+            </div>
+          )}
+
+          {/* Advanced OAuth Client ID setting for custom deployments (Render, Vercel, custom domain) */}
+          <div className="mt-4 pt-3 border-t border-blue-100/80 dark:border-zinc-800">
+            <button
+              type="button"
+              onClick={() => setShowOAuthSettings(!showOAuthSettings)}
+              className="text-[11px] text-blue-600 hover:text-blue-700 dark:text-blue-400 font-semibold font-cute flex items-center gap-1.5 cursor-pointer"
+            >
+              <span>⚙️ Cấu hình Google OAuth Client ID (Dành cho trang web riêng / Render / Tên miền tùy chỉnh)</span>
+              <span>{showOAuthSettings ? '▲' : '▼'}</span>
+            </button>
+
+            {showOAuthSettings && (
+              <form onSubmit={handleSaveCustomClientId} className="mt-3 p-3.5 rounded-2xl bg-white/90 dark:bg-zinc-800/90 border border-blue-200 dark:border-zinc-700 space-y-2.5 text-xs">
+                <div>
+                  <label className="block text-[11px] font-bold text-zinc-700 dark:text-zinc-300 font-cute mb-1">
+                    Google OAuth Client ID đang kích hoạt:
+                  </label>
+                  <input
+                    type="text"
+                    value={customClientIdInput}
+                    onChange={(e) => setCustomClientIdInput(e.target.value)}
+                    placeholder="xxxx.apps.googleusercontent.com"
+                    className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 focus:outline-hidden focus:ring-2 focus:ring-blue-400"
+                  />
+                </div>
+                <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
+                  <p className="text-[10px] text-zinc-500 dark:text-zinc-400 font-cute">
+                    💡 Đảm bảo tên miền của bạn (ví dụ: <code className="text-blue-600 font-mono">https://moonandcloud-3.onrender.com</code>) đã được thêm vào mục <strong>Authorized JavaScript origins</strong> của Client ID này trên Google Cloud.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleResetClientId}
+                      className="px-3 py-1.5 text-[11px] text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-xl transition cursor-pointer"
+                    >
+                      Đặt lại mặc định
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] shadow-xs transition active:scale-95 cursor-pointer flex items-center gap-1"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>{isSavedClientId ? 'Đã Lưu!' : 'Lưu Client ID'}</span>
+                    </button>
+                  </div>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 2. ANNIVERSARY DATE SETTING */}
+      <div className={`rounded-3xl ${currentTheme.cardBg} border ${currentTheme.borderSubtle} p-5 sm:p-7 shadow-md`}>
+        <div className="flex items-center gap-2 mb-4">
+          <Heart className="w-5 h-5 text-rose-500 fill-rose-500" />
+          <h3 className="text-base sm:text-lg font-bold text-zinc-800 dark:text-zinc-100 font-cute">
+            Ngày Bắt Đầu Yêu & Kỷ Niệm
+          </h3>
+        </div>
+
+        <form onSubmit={handleSaveAnniversary} className="flex flex-col sm:flex-row items-end gap-3">
+          <div className="flex-1 w-full">
+            <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1.5 font-cute">
+              Ngày hai bạn chính thức yêu nhau (Dùng để đếm ngày yêu thời gian thực):
+            </label>
+            <input
+              type="date"
+              value={startDateInput}
+              onChange={(e) => setStartDateInput(e.target.value)}
+              className="w-full px-4 py-2.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-rose-400 outline-hidden"
+            />
+          </div>
+          <button
+            type="submit"
+            className="w-full sm:w-auto px-6 py-2.5 rounded-2xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs shadow-md shadow-rose-200 dark:shadow-none transition active:scale-95 cursor-pointer whitespace-nowrap"
+          >
+            Lưu Ngày Yêu 💖
+          </button>
+        </form>
+      </div>
+
+      {/* 3. THEME & APPEARANCE CUSTOMIZATION */}
+      <div className={`rounded-3xl ${currentTheme.cardBg} border ${currentTheme.borderSubtle} p-5 sm:p-7 shadow-md`}>
+        <div className="flex items-center gap-2 mb-4">
+          <Palette className="w-5 h-5 text-rose-500" />
+          <h3 className="text-base sm:text-lg font-bold text-zinc-800 dark:text-zinc-100 font-cute">
+            Tùy Chỉnh Chủ Đề & Giao Diện
+          </h3>
+        </div>
+
+        {/* Theme Palette Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
+          {Object.values(THEMES).map((theme) => {
+            const isSelected = settings.theme === theme.id;
+            return (
+              <button
+                key={theme.id}
+                onClick={() => {
+                  soundService.playPop();
+                  updateSettings({ theme: theme.id });
+                }}
+                className={`p-3.5 rounded-2xl border text-left transition relative overflow-hidden flex flex-col justify-between cursor-pointer ${
+                  isSelected
+                    ? 'border-rose-500 ring-2 ring-rose-400 bg-rose-50/60 dark:bg-rose-950/30'
+                    : 'border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/40 hover:bg-zinc-100'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xl">{theme.emoji}</span>
+                  <span
+                    className="w-5 h-5 rounded-full border-2 border-white shadow-sm"
+                    style={{ backgroundColor: theme.primaryColor }}
+                  />
+                </div>
+                <div>
+                  <h4 className="font-bold text-xs sm:text-sm text-zinc-800 dark:text-zinc-100 font-cute">
+                    {theme.name}
+                  </h4>
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400 line-clamp-1 mt-0.5">
+                    {theme.description}
+                  </p>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Switches: Dark Mode, Sound Effects, Floating Particles */}
+        <div className="space-y-3 pt-2 border-t border-zinc-200 dark:border-zinc-800">
+          {/* Dark mode switch */}
+          <div className="flex items-center justify-between p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-800/40">
+            <div className="flex items-center gap-2.5">
+              {settings.isDarkMode ? (
+                <Moon className="w-5 h-5 text-indigo-400" />
+              ) : (
+                <Sun className="w-5 h-5 text-amber-500" />
+              )}
+              <div>
+                <div className="text-xs sm:text-sm font-bold text-zinc-800 dark:text-zinc-100">
+                  Chế độ tối (Dark Mode)
+                </div>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  Bảo vệ mắt khi viết nhật ký ban đêm cùng người yêu
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                soundService.playPop();
+                updateSettings({ isDarkMode: !settings.isDarkMode });
+              }}
+              className={`w-12 h-6 rounded-full transition relative p-0.5 cursor-pointer ${
+                settings.isDarkMode ? 'bg-rose-500' : 'bg-zinc-300 dark:bg-zinc-700'
+              }`}
+            >
+              <div
+                className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                  settings.isDarkMode ? 'translate-x-6' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Sound Effects switch */}
+          <div className="flex items-center justify-between p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-800/40">
+            <div className="flex items-center gap-2.5">
+              {settings.soundEnabled ? (
+                <Volume2 className="w-5 h-5 text-rose-500" />
+              ) : (
+                <VolumeX className="w-5 h-5 text-zinc-400" />
+              )}
+              <div>
+                <div className="text-xs sm:text-sm font-bold text-zinc-800 dark:text-zinc-100">
+                  Âm thanh lãng mạn (Sound Effects)
+                </div>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  Âm thanh nhịp tim, mở thư tình, tiếng chuông lật sách
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => soundService.playHeartbeat()}
+                className="px-2.5 py-1 text-[11px] font-bold rounded-xl bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-300 cursor-pointer"
+              >
+                Thử tiếng 🎵
+              </button>
+              <button
+                onClick={() => updateSettings({ soundEnabled: !settings.soundEnabled })}
+                className={`w-12 h-6 rounded-full transition relative p-0.5 cursor-pointer ${
+                  settings.soundEnabled ? 'bg-rose-500' : 'bg-zinc-300 dark:bg-zinc-700'
+                }`}
+              >
+                <div
+                  className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                    settings.soundEnabled ? 'translate-x-6' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+
+          {/* Floating Particles switch */}
+          <div className="flex items-center justify-between p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-800/40">
+            <div className="flex items-center gap-2.5">
+              <Sparkles className="w-5 h-5 text-amber-500" />
+              <div>
+                <div className="text-xs sm:text-sm font-bold text-zinc-800 dark:text-zinc-100">
+                  Hiệu ứng cánh hoa & trái tim bay (Floating Particles)
+                </div>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  Cánh hoa anh đào và trái tim bay lượn nhẹ nhàng
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => updateSettings({ floatingParticles: !settings.floatingParticles })}
+              className={`w-12 h-6 rounded-full transition relative p-0.5 cursor-pointer ${
+                settings.floatingParticles ? 'bg-rose-500' : 'bg-zinc-300 dark:bg-zinc-700'
+              }`}
+            >
+              <div
+                className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                  settings.floatingParticles ? 'translate-x-6' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 4. PROFILE CUSTOMIZATION */}
+      <div className={`rounded-3xl ${currentTheme.cardBg} border ${currentTheme.borderSubtle} p-5 sm:p-7 shadow-md`}>
+        <div className="flex items-center gap-2 mb-4">
+          <User className="w-5 h-5 text-rose-500" />
+          <h3 className="text-base sm:text-lg font-bold text-zinc-800 dark:text-zinc-100 font-cute">
+            Hồ Sơ Của Bạn
+          </h3>
+        </div>
+
+        <form onSubmit={handleSaveProfile} className="space-y-4">
+          <div className="flex items-center gap-4">
+            <div className="relative">
+              <img
+                src={avatar || DEFAULT_AVATAR_ME}
+                alt="Avatar"
+                className="w-16 h-16 rounded-full object-cover ring-4 ring-rose-400/50"
+              />
+              <label className="absolute -bottom-1 -right-1 p-1.5 rounded-full bg-rose-500 text-white cursor-pointer hover:bg-rose-600 transition shadow-md">
+                <Upload className="w-3.5 h-3.5" />
+                <input type="file" accept="image/*" onChange={handleAvatarFile} className="hidden" />
+              </label>
+            </div>
+
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1">
+                  Tên hiển thị
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-100 border-0"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1">
+                  Biệt danh người yêu gọi
+                </label>
+                <input
+                  type="text"
+                  value={nickname}
+                  onChange={(e) => setNickname(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-100 border-0"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1">
+                Dòng trạng thái yêu thương
+              </label>
+              <input
+                type="text"
+                value={statusText}
+                onChange={(e) => setStatusText(e.target.value)}
+                placeholder="Ví dụ: Đang nhớ người yêu..."
+                className="w-full px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-100 border-0"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1">
+                Địa điểm / Emoji vị trí
+              </label>
+              <input
+                type="text"
+                value={locationEmoji}
+                onChange={(e) => setLocationEmoji(e.target.value)}
+                placeholder="Ví dụ: 📍 Hà Nội"
+                className="w-full px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-100 border-0"
+              />
+            </div>
+          </div>
+
+          {/* Birthday Configuration */}
+          <div className="p-4 rounded-2xl bg-rose-50/50 dark:bg-zinc-800/40 border border-rose-100 dark:border-zinc-700/60 space-y-3">
+            <div className="text-xs font-bold text-rose-600 dark:text-rose-400 flex items-center gap-1.5 font-cute">
+              <span>🎂</span>
+              <span>Cập Nhật Ngày Sinh Nhật (Tự Động Tạo Sự Kiện Đếm Ngược)</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+                  Ngày sinh của bạn:
+                </label>
+                <input
+                  type="date"
+                  value={birthday}
+                  onChange={(e) => setBirthday(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-rose-400"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+                  Sinh nhật người yêu:
+                </label>
+                <input
+                  type="date"
+                  value={partnerBirthday}
+                  onChange={(e) => setPartnerBirthday(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-rose-400"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-2">
+            {isProfileSaved ? (
+              <span className="text-xs font-bold text-emerald-500 flex items-center gap-1">
+                <Check className="w-4 h-4" /> Đã lưu thông tin hồ sơ!
+              </span>
+            ) : <div />}
+
+            <button
+              type="submit"
+              className="px-6 py-2.5 rounded-2xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs shadow-md shadow-rose-200 dark:shadow-rose-950 transition active:scale-95 cursor-pointer"
+            >
+              Lưu Hồ Sơ 💖
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {/* 5. BACKUP & RESTORE DATA */}
+      <div className={`rounded-[32px] ${currentTheme.cardBg} border ${currentTheme.borderSubtle} p-6 sm:p-8 shadow-xl shadow-rose-100/30 dark:shadow-none`}>
+        <div className="flex items-center gap-2 mb-3">
+          <Download className="w-5 h-5 text-[#FF758F]" />
+          <h3 className="text-base sm:text-lg font-serif italic font-bold text-[#333] dark:text-[#f4effa]">
+            Sao Lưu & Khôi Phục Dữ Liệu Ngoại Tuyến
+          </h3>
+        </div>
+
+        <p className="text-xs text-[#888] dark:text-zinc-400 mb-4 font-cute">
+          Xuất toàn bộ nhật ký, ảnh kỷ niệm, thiệp viết tay và ngày kỷ niệm ra file JSON để lưu giữ an toàn trên máy tính hoặc điện thoại của bạn.
+        </p>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            onClick={handleExport}
+            className="px-5 py-2.5 rounded-full bg-[#FFF5F7] dark:bg-zinc-800 hover:bg-[#FFE4E9] border border-[#FFE4E9] text-[#FF758F] font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+          >
+            <Download className="w-4 h-4 text-[#FF758F]" />
+            <span>Xuất Sao Lưu (JSON)</span>
+          </button>
+
+          <label className="px-5 py-2.5 rounded-full bg-white dark:bg-zinc-800 hover:bg-[#FFF5F7] border border-[#FFE4E9] text-zinc-700 dark:text-zinc-200 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition">
+            <Upload className="w-4 h-4 text-emerald-500" />
+            <span>Nhập File Sao Lưu</span>
+            <input type="file" accept=".json" onChange={handleImportFile} className="hidden" />
+          </label>
+
+          {importStatus && (
+            <span className="text-xs font-bold text-[#FF758F] animate-pulse">{importStatus}</span>
+          )}
+        </div>
+      </div>
+
+      {/* 6. DANGER ZONE & CLEAR ALL DATA */}
+      <div className={`rounded-[32px] bg-red-50/40 dark:bg-red-950/20 border border-red-200/70 dark:border-red-900/50 p-6 sm:p-8 shadow-sm`}>
+        <div className="flex items-center gap-2 mb-3">
+          <Trash2 className="w-5 h-5 text-red-500" />
+          <h3 className="text-base sm:text-lg font-serif italic font-bold text-red-700 dark:text-red-400">
+            Quản Lý & Xóa Dữ Liệu Hệ Thống
+          </h3>
+        </div>
+
+        <p className="text-xs text-zinc-600 dark:text-zinc-400 mb-5 font-cute leading-relaxed">
+          Nếu bạn gặp sự cố không đồng bộ giữa các thiết bị hoặc muốn bắt đầu lại hoàn toàn từ đầu, bạn có thể xóa bộ nhớ máy hoặc làm sạch toàn bộ dữ liệu trên hệ thống máy chủ.
+        </p>
+
+        {clearSuccessMsg && (
+          <div className="mb-4 p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs font-bold text-emerald-700 dark:text-emerald-300 font-cute flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+            <span>{clearSuccessMsg}</span>
+          </div>
+        )}
+
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              setClearType('device');
+              setShowClearModal(true);
+            }}
+            className="px-5 py-2.5 rounded-2xl bg-white dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 font-bold text-xs flex items-center justify-center gap-2 transition active:scale-95 cursor-pointer shadow-xs"
+          >
+            <LogOut className="w-4 h-4 text-zinc-500" />
+            <span>Đăng Xuất & Xóa Bộ Nhớ Máy Này</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setClearType('all');
+              setShowClearModal(true);
+            }}
+            className="px-5 py-2.5 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs flex items-center justify-center gap-2 transition active:scale-95 cursor-pointer shadow-md shadow-red-200 dark:shadow-none"
+          >
+            <Trash2 className="w-4 h-4" />
+            <span>Xóa Toàn Bộ Dữ Liệu Web & Máy Chủ (Reset All)</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Clear Confirmation Modal */}
+      {showClearModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-2xl space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-red-100 dark:bg-red-950/60 flex items-center justify-center text-red-500 mx-auto">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+
+            <div className="text-center space-y-2">
+              <h4 className="text-base font-bold text-zinc-900 dark:text-zinc-100 font-cute">
+                {clearType === 'all'
+                  ? 'Xác Nhận Xóa Toàn Bộ Dữ Liệu Web & Máy Chủ?'
+                  : 'Đăng Xuất & Xóa Bộ Nhớ Trên Máy Này?'}
+              </h4>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 font-cute leading-relaxed">
+                {clearType === 'all'
+                  ? 'Hành động này sẽ xóa sạch tài khoản, phòng ghép đôi, nhật ký và ảnh trên máy chủ. Bạn có thể đăng ký tài khoản mới tinh sau khi xóa.'
+                  : 'Dữ liệu lưu trữ cục bộ trên trình duyệt này sẽ được làm sạch. Dữ liệu tài khoản của bạn trên máy chủ vẫn còn nguyên.'}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                disabled={isClearing}
+                onClick={() => setShowClearModal(false)}
+                className="flex-1 py-2.5 rounded-2xl border border-zinc-300 dark:border-zinc-700 font-bold text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer disabled:opacity-50"
+              >
+                Hủy Bỏ
+              </button>
+
+              <button
+                type="button"
+                disabled={isClearing}
+                onClick={async () => {
+                  try {
+                    setIsClearing(true);
+                    if (clearType === 'all') {
+                      await clearAllSystemAndLocalData();
+                      setClearSuccessMsg('Đã xóa toàn bộ dữ liệu máy chủ và làm mới ứng dụng thành công!');
+                    } else {
+                      await clearAllUserDataAndLogout();
+                      setClearSuccessMsg('Đã đăng xuất và làm sạch bộ nhớ cục bộ.');
+                    }
+                    setShowClearModal(false);
+                    setTimeout(() => {
+                      window.location.reload();
+                    }, 800);
+                  } catch (err: any) {
+                    alert('Lỗi: ' + (err.message || 'Không thể xóa dữ liệu.'));
+                  } finally {
+                    setIsClearing(false);
+                  }
+                }}
+                className="flex-1 py-2.5 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs transition active:scale-95 cursor-pointer shadow-md disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                {isClearing ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Đang Xóa...</span>
+                  </>
+                ) : (
+                  <span>Đồng Ý Xóa</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Interactive Avatar Cropper */}
+      <AvatarCropModal
+        isOpen={cropModalOpen}
+        imageSrc={rawImageForCrop}
+        onClose={() => {
+          setCropModalOpen(false);
+          setRawImageForCrop(null);
+        }}
+        onCropComplete={handleCropComplete}
+      />
+    </div>
+  );
+};

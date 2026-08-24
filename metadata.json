@@ -1,0 +1,6 @@
+{
+  "name": "Nhật Ký Cặp Đôi (LoveSync)",
+  "description": "Ứng dụng nhật ký cặp đôi bảo mật mã hóa đầu cuối (E2EE), đồng bộ thời gian thực, sao lưu tự động lên Google Drive, album ảnh chung, thiệp viết tay lãng mạn và đếm ngày yêu kỷ niệm.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
