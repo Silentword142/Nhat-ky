@@ -26,6 +26,7 @@ import {
   registerAccount,
   loginAccount,
   loginWithGoogle,
+  changePasswordWithoutOld,
   getCurrentAuthUser,
   getStoredWebAccounts,
   saveStoredWebAccounts,
@@ -63,9 +64,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     googleDriveLastSavedAt,
   } = useCouple();
 
-  const [activeTab, setActiveTab] = useState<'login' | 'register'>('register');
+  const [activeTab, setActiveTab] = useState<'login' | 'register' | 'change_password'>('register');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [birthday, setBirthday] = useState('');
   const [roomCodeInput, setRoomCodeInput] = useState('');
@@ -317,6 +319,43 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     }
   };
 
+  // Handle Direct Password Change (No Old Password Required)
+  const handleChangePasswordDirectly = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanUser = username.trim().toLowerCase();
+    if (!cleanUser) {
+      setErrorMsg('Vui lòng nhập tên tài khoản cần đổi mật khẩu.');
+      return;
+    }
+    if (!password.trim() || password.length < 4) {
+      setErrorMsg('Mật khẩu mới cần tối thiểu 4 ký tự.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setErrorMsg('Xác nhận mật khẩu mới không khớp.');
+      return;
+    }
+
+    setIsLoading(true);
+    setErrorMsg(null);
+
+    try {
+      soundService.playPop();
+      const res = await changePasswordWithoutOld(cleanUser, password);
+      soundService.playSparkle();
+      setSuccessMsg(res.message || 'Đã đổi mật khẩu thành công! Bạn có thể đăng nhập bằng mật khẩu mới.');
+      setPassword('');
+      setConfirmPassword('');
+      setTimeout(() => {
+        setActiveTab('login');
+      }, 1500);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Không thể đổi mật khẩu. Vui lòng kiểm tra lại tên tài khoản.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Quick Select Saved Account
   const handleSelectSavedAccount = (acc: StoredAccountRecord) => {
     soundService.playPop();
@@ -505,31 +544,49 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
               </a>
             )}
 
-            {/* Logout button */}
+            {/* Logout and Change Password buttons */}
             <div className="pt-2 flex items-center justify-between gap-3">
               <button
                 type="button"
-                onClick={onClose}
-                className="px-5 py-2.5 rounded-2xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs font-bold hover:bg-zinc-200 dark:hover:bg-zinc-700 transition cursor-pointer"
+                onClick={() => {
+                  soundService.playPop();
+                  if (currentAuth?.username) {
+                    setUsername(currentAuth.username);
+                  }
+                  setActiveTab('change_password');
+                  setErrorMsg(null);
+                }}
+                className="px-4 py-2.5 rounded-2xl bg-rose-50 hover:bg-rose-100 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-rose-600 dark:text-rose-300 border border-rose-200/70 dark:border-zinc-700 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
               >
-                Đóng
+                <KeyRound className="w-4 h-4" />
+                <span>Đổi Mật Khẩu</span>
               </button>
-              <button
-                type="button"
-                disabled={isLoading}
-                onClick={handleLogout}
-                className="px-5 py-2.5 rounded-2xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-300 text-xs font-bold flex items-center gap-1.5 hover:bg-red-100 transition cursor-pointer"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>Đăng Xuất</span>
-              </button>
+              
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2.5 rounded-2xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs font-bold hover:bg-zinc-200 dark:hover:bg-zinc-700 transition cursor-pointer"
+                >
+                  Đóng
+                </button>
+                <button
+                  type="button"
+                  disabled={isLoading}
+                  onClick={handleLogout}
+                  className="px-4 py-2.5 rounded-2xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-300 text-xs font-bold flex items-center gap-1.5 hover:bg-red-100 transition cursor-pointer"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Đăng Xuất</span>
+                </button>
+              </div>
             </div>
           </div>
         ) : (
-          /* 2. Login & Register Forms */
+          /* 2. Login, Register & Change Password Forms */
           <div className="space-y-4">
             {/* Tabs */}
-            <div className="grid grid-cols-2 p-1 rounded-2xl bg-zinc-100 dark:bg-zinc-800 text-xs font-bold">
+            <div className="grid grid-cols-3 p-1 rounded-2xl bg-zinc-100 dark:bg-zinc-800 text-xs font-bold gap-1">
               <button
                 type="button"
                 onClick={() => {
@@ -537,14 +594,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                   setActiveTab('register');
                   setErrorMsg(null);
                 }}
-                className={`py-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                className={`py-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1 ${
                   activeTab === 'register'
                     ? 'bg-white dark:bg-zinc-900 text-rose-600 dark:text-rose-400 shadow-sm'
                     : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
                 }`}
               >
                 <UserPlus className="w-3.5 h-3.5" />
-                <span>Lập Tài Khoản Mới</span>
+                <span className="truncate">Tạo TK</span>
               </button>
 
               <button
@@ -554,14 +611,31 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                   setActiveTab('login');
                   setErrorMsg(null);
                 }}
-                className={`py-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                className={`py-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1 ${
                   activeTab === 'login'
                     ? 'bg-white dark:bg-zinc-900 text-rose-600 dark:text-rose-400 shadow-sm'
                     : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
                 }`}
               >
                 <LogIn className="w-3.5 h-3.5" />
-                <span>Đăng Nhập</span>
+                <span className="truncate">Đăng Nhập</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  soundService.playPop();
+                  setActiveTab('change_password');
+                  setErrorMsg(null);
+                }}
+                className={`py-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1 ${
+                  activeTab === 'change_password'
+                    ? 'bg-white dark:bg-zinc-900 text-rose-600 dark:text-rose-400 shadow-sm'
+                    : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
+                }`}
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span className="truncate">Đổi MK</span>
               </button>
             </div>
 
@@ -780,6 +854,81 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                 >
                   <LogIn className="w-4 h-4" />
                   <span>{isLoading ? 'Đang đăng nhập...' : 'Đăng Nhập Vào Web 💖'}</span>
+                </button>
+              </form>
+            )}
+
+            {/* DIRECT CHANGE PASSWORD FORM (No Old Password Required) */}
+            {activeTab === 'change_password' && (
+              <form onSubmit={handleChangePasswordDirectly} className="space-y-3">
+                <div className="p-3 rounded-2xl bg-rose-50/60 dark:bg-rose-950/30 border border-rose-200/60 dark:border-rose-900/40 text-xs text-rose-700 dark:text-rose-300">
+                  <p className="font-bold flex items-center gap-1.5 mb-0.5">
+                    <KeyRound className="w-3.5 h-3.5" />
+                    <span>Đổi Mật Khẩu Nhanh Trực Tiếp</span>
+                  </p>
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                    Không cần nhập lại mật khẩu cũ. Chỉ cần nhập tên tài khoản và mật khẩu mới bạn muốn đặt.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1">
+                    Tên tài khoản cần đổi mật khẩu *
+                  </label>
+                  <div className="relative">
+                    <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                    <input
+                      type="text"
+                      required
+                      placeholder="Nhập tên tài khoản của bạn..."
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 text-xs font-medium text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-rose-400"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1">
+                    Mật khẩu mới (tối thiểu 4 ký tự) *
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                    <input
+                      type="password"
+                      required
+                      placeholder="Nhập mật khẩu mới..."
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 text-xs font-medium text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-rose-400"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1">
+                    Xác nhận lại mật khẩu mới *
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                    <input
+                      type="password"
+                      required
+                      placeholder="Nhập lại mật khẩu mới..."
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 text-xs font-medium text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-rose-400"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full py-3 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white font-bold text-xs sm:text-sm shadow-md shadow-rose-200 dark:shadow-rose-950 flex items-center justify-center gap-2 transition active:scale-98 cursor-pointer disabled:opacity-50"
+                >
+                  <KeyRound className="w-4 h-4" />
+                  <span>{isLoading ? 'Đang cập nhật...' : 'Cập Nhật Mật Khẩu Mới Ngay 🔑'}</span>
                 </button>
               </form>
             )}

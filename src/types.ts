@@ -11,6 +11,8 @@ export interface CoupleProfile {
   birthday?: string; // YYYY-MM-DD
   email?: string;
   authProvider?: 'google' | 'email' | 'username' | 'guest';
+  bio?: string;
+  loveQuote?: string;
   lastActive: number;
   musicPlaylist?: any[];
   musicCurrentTrackId?: string;

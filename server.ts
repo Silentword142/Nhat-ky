@@ -345,6 +345,45 @@ app.post('/api/auth/login', (req, res) => {
   }
 });
 
+// Change / Reset Password Directly (No Old Password Required)
+app.post('/api/auth/change-password', (req, res) => {
+  try {
+    const { username, newPassword } = req.body;
+
+    if (!username || typeof username !== 'string') {
+      return res.status(400).json({ success: false, error: 'Vui lòng cung cấp tên tài khoản.' });
+    }
+    if (!newPassword || typeof newPassword !== 'string' || newPassword.trim().length < 4) {
+      return res.status(400).json({ success: false, error: 'Mật khẩu mới cần tối thiểu 4 ký tự.' });
+    }
+
+    const cleanUsername = username.trim().toLowerCase();
+    const account = usersDb[cleanUsername];
+
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        error: `Không tìm thấy tài khoản "${cleanUsername}" trên hệ thống.`,
+      });
+    }
+
+    // Update password hash directly without needing old password
+    account.passwordHash = hashUserPassword(newPassword.trim());
+    account.updatedAt = Date.now();
+    saveUsersDb();
+
+    console.log(`[AUTH] Successfully updated password for user "${cleanUsername}" (no old password required)`);
+
+    return res.json({
+      success: true,
+      message: `Đã đổi mật khẩu cho tài khoản "${cleanUsername}" thành công!`,
+    });
+  } catch (err: any) {
+    console.error('Change password API error:', err);
+    return res.status(500).json({ success: false, error: 'Lỗi khi đổi mật khẩu.' });
+  }
+});
+
 // Fetch User Profile (For cross-device authoritative state refresh)
 app.get('/api/auth/user/:username', (req, res) => {
   const cleanUsername = req.params.username.trim().toLowerCase();
@@ -869,6 +908,43 @@ app.get('/api/room/:roomCode/state', (req, res) => {
   res.json({ success: true, exists: true, room, serverTime: Date.now() });
 });
 
+// Helper to safely merge collections without overwriting items created on other devices
+function mergeCollection<T extends { id?: string; updatedAt?: number; createdAt?: string | number }>(
+  currentList: T[] = [],
+  incomingList: T[] = [],
+  deletedSet: Set<string>
+): T[] {
+  const map = new Map<string, T>();
+  // 1. Add current list items (filtering out deleted items)
+  for (const item of currentList) {
+    if (item && item.id) {
+      if (!deletedSet.has(item.id)) {
+        map.set(item.id, item);
+      }
+    }
+  }
+  // 2. Add / update incoming items
+  for (const incoming of incomingList) {
+    if (!incoming || !incoming.id) continue;
+    if (deletedSet.has(incoming.id)) continue;
+
+    const existing = map.get(incoming.id);
+    if (!existing) {
+      map.set(incoming.id, incoming);
+    } else {
+      // Merge properties, preferring the newer version
+      const existingTime = Number(existing.updatedAt || (existing as any).date || 0);
+      const incomingTime = Number(incoming.updatedAt || (incoming as any).date || 0);
+      if (incomingTime >= existingTime) {
+        map.set(incoming.id, { ...existing, ...incoming });
+      } else {
+        map.set(incoming.id, { ...incoming, ...existing });
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
 // REST API for smart state synchronization (Push / Merge)
 app.post('/api/room/:roomCode/sync', (req, res) => {
   try {
@@ -892,26 +968,49 @@ app.post('/api/room/:roomCode/sync', (req, res) => {
 
     const currentRoom = roomsDb[upperCode];
     if (!currentRoom.deletedItemIds) currentRoom.deletedItemIds = [];
+
+    // Track explicit deletions
+    if (state?.deletedId && typeof state.deletedId === 'string') {
+      if (!currentRoom.deletedItemIds.includes(state.deletedId)) {
+        currentRoom.deletedItemIds.push(state.deletedId);
+      }
+    }
+    if (Array.isArray(state?.deletedItemIds)) {
+      for (const delId of state.deletedItemIds) {
+        if (delId && !currentRoom.deletedItemIds.includes(delId)) {
+          currentRoom.deletedItemIds.push(delId);
+        }
+      }
+    }
+
     const deletedSet = new Set(currentRoom.deletedItemIds);
 
-    // Update diaries safely
+    // Merge diaries safely without wiping partner's entries
     if (state && Array.isArray(state.diaries)) {
-      currentRoom.diaries = state.diaries;
+      currentRoom.diaries = mergeCollection(currentRoom.diaries || [], state.diaries, deletedSet);
+    } else if (currentRoom.diaries) {
+      currentRoom.diaries = currentRoom.diaries.filter((d: any) => !deletedSet.has(d.id));
     }
 
-    // Update photos safely
+    // Merge photos safely
     if (state && Array.isArray(state.photos)) {
-      currentRoom.photos = state.photos;
+      currentRoom.photos = mergeCollection(currentRoom.photos || [], state.photos, deletedSet);
+    } else if (currentRoom.photos) {
+      currentRoom.photos = currentRoom.photos.filter((p: any) => !deletedSet.has(p.id));
     }
 
-    // Update cards safely
+    // Merge cards safely
     if (state && Array.isArray(state.cards)) {
-      currentRoom.cards = state.cards;
+      currentRoom.cards = mergeCollection(currentRoom.cards || [], state.cards, deletedSet);
+    } else if (currentRoom.cards) {
+      currentRoom.cards = currentRoom.cards.filter((c: any) => !deletedSet.has(c.id));
     }
 
-    // Update anniversaries safely
+    // Merge anniversaries safely
     if (state && Array.isArray(state.anniversaries)) {
-      currentRoom.anniversaries = state.anniversaries;
+      currentRoom.anniversaries = mergeCollection(currentRoom.anniversaries || [], state.anniversaries, deletedSet);
+    } else if (currentRoom.anniversaries) {
+      currentRoom.anniversaries = currentRoom.anniversaries.filter((a: any) => !deletedSet.has(a.id));
     }
 
     // Update playlist safely

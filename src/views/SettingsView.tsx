@@ -29,14 +29,19 @@ import {
   LogOut,
   Trash2,
   AlertTriangle,
+  Lock,
+  KeyRound,
+  Eye,
 } from 'lucide-react';
 import { useCouple } from '../context/CoupleContext';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { compressImageFile, CUTE_AVATARS } from '../utils/image';
-import { DEFAULT_AVATAR_ME } from '../services/mockData';
+import { DEFAULT_AVATAR_ME, DEFAULT_AVATAR_PARTNER } from '../services/mockData';
 import { getOAuthClientId, setCustomOAuthClientId, DEFAULT_PROD_CLIENT_ID } from '../services/googleAuth';
 import { AvatarCropModal } from '../components/AvatarCropModal';
+import { PartnerProfileModal } from '../components/PartnerProfileModal';
+import { changePasswordWithoutOld, getCurrentAuthUser } from '../services/auth';
 
 export const SettingsView: React.FC = () => {
   const {
@@ -65,7 +70,6 @@ export const SettingsView: React.FC = () => {
     setRoomCode,
     changeCoupleRoomCode,
     leaveCoupleRoom,
-    linkPartnerAccount,
     unlinkPartnerAccount,
     clearAllUserDataAndLogout,
     clearAllSystemAndLocalData,
@@ -80,8 +84,52 @@ export const SettingsView: React.FC = () => {
   const [statusText, setStatusText] = useState(myProfile.statusText);
   const [locationEmoji, setLocationEmoji] = useState(myProfile.locationEmoji);
   const [birthday, setBirthday] = useState(myProfile.birthday || '');
-  const [partnerBirthday, setPartnerBirthday] = useState(settings.partnerBirthday || '');
   const [isProfileSaved, setIsProfileSaved] = useState(false);
+
+  // Partner Profile Modal state
+  const [showPartnerModal, setShowPartnerModal] = useState(false);
+
+  // Direct Password Change State (No old password required)
+  const currentAuth = getCurrentAuthUser();
+  const [pwdUsername, setPwdUsername] = useState(currentAuth?.username || '');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [pwdLoading, setPwdLoading] = useState(false);
+  const [pwdSuccessMsg, setPwdSuccessMsg] = useState<string | null>(null);
+  const [pwdErrorMsg, setPwdErrorMsg] = useState<string | null>(null);
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanUser = (pwdUsername || currentAuth?.username || '').trim().toLowerCase();
+    if (!cleanUser) {
+      setPwdErrorMsg('Vui lòng nhập tên tài khoản cần đổi mật khẩu.');
+      return;
+    }
+    if (!newPassword.trim() || newPassword.length < 4) {
+      setPwdErrorMsg('Mật khẩu mới cần tối thiểu 4 ký tự.');
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setPwdErrorMsg('Xác nhận mật khẩu mới không khớp.');
+      return;
+    }
+
+    setPwdLoading(true);
+    setPwdErrorMsg(null);
+    try {
+      soundService.playPop();
+      const res = await changePasswordWithoutOld(cleanUser, newPassword);
+      soundService.playSparkle();
+      setPwdSuccessMsg(res.message || 'Đã đổi mật khẩu thành công! Không cần nhập lại mật khẩu cũ.');
+      setNewPassword('');
+      setConfirmNewPassword('');
+      setTimeout(() => setPwdSuccessMsg(null), 4000);
+    } catch (err: any) {
+      setPwdErrorMsg(err.message || 'Không thể đổi mật khẩu. Vui lòng kiểm tra lại.');
+    } finally {
+      setPwdLoading(false);
+    }
+  };
 
   // Danger Zone / Clear Data States
   const [showClearModal, setShowClearModal] = useState(false);
@@ -103,10 +151,6 @@ export const SettingsView: React.FC = () => {
     setBirthday(myProfile.birthday || '');
   }, [myProfile]);
 
-  React.useEffect(() => {
-    setPartnerBirthday(settings.partnerBirthday || '');
-  }, [settings.partnerBirthday]);
-
   // Pairing & Live Sync states
   const [roomCodeInput, setRoomCodeInput] = useState(settings.roomCode);
   const [hasCopiedCode, setHasCopiedCode] = useState(false);
@@ -115,11 +159,6 @@ export const SettingsView: React.FC = () => {
   const [isChangingRoom, setIsChangingRoom] = useState(false);
   const [syncSuccessNotice, setSyncSuccessNotice] = useState<string | null>(null);
   const [driveActionNotice, setDriveActionNotice] = useState<string | null>(null);
-
-  // Partner account linking state
-  const [partnerUserInput, setPartnerUserInput] = useState('');
-  const [isLinking, setIsLinking] = useState(false);
-  const [linkError, setLinkError] = useState<string | null>(null);
 
   // Anniversary date setting
   const [startDateInput, setStartDateInput] = useState(settings.coupleStartDate);
@@ -194,26 +233,6 @@ export const SettingsView: React.FC = () => {
       setSyncSuccessNotice(`Lỗi: ${err.message || 'Không thể đổi mã phòng'}`);
     } finally {
       setIsChangingRoom(false);
-    }
-  };
-
-  // Link Partner Account
-  const handleLinkPartner = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const clean = partnerUserInput.trim().toLowerCase();
-    if (!clean) return;
-
-    try {
-      setIsLinking(true);
-      setLinkError(null);
-      await linkPartnerAccount(clean);
-      setPartnerUserInput('');
-      setSyncSuccessNotice(`Đã liên kết thành công với tài khoản "@${clean}"! Hai bạn sẽ luôn đồng bộ mã phòng cùng nhau.`);
-      setTimeout(() => setSyncSuccessNotice(null), 4500);
-    } catch (err: any) {
-      setLinkError(err.message || 'Không thể liên kết tài khoản.');
-    } finally {
-      setIsLinking(false);
     }
   };
 
@@ -358,12 +377,6 @@ export const SettingsView: React.FC = () => {
       locationEmoji: locationEmoji.trim(),
       birthday: birthday || undefined,
     });
-
-    if (partnerBirthday !== settings.partnerBirthday) {
-      updateSettings({
-        partnerBirthday: partnerBirthday || undefined,
-      });
-    }
 
     setIsProfileSaved(true);
     setSyncSuccessNotice('Đã cập nhật hồ sơ và ngày sinh nhật vào hệ thống sự kiện!');
@@ -575,80 +588,80 @@ export const SettingsView: React.FC = () => {
           </div>
         </div>
 
-        {/* PARTNER 1-TO-1 ACCOUNT LINKING CARD */}
+        {/* COUPLE CONNECTION & UNLINK CARD */}
         <div className="mt-5 p-5 rounded-3xl bg-gradient-to-br from-rose-50/80 via-pink-50/40 to-white dark:from-zinc-800/80 dark:to-zinc-900 border border-rose-200/70 dark:border-zinc-700">
           <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
             <div className="flex items-center gap-2">
               <span className="text-xl">💑</span>
               <h4 className="text-sm font-bold text-zinc-800 dark:text-zinc-100 font-cute">
-                Liên Kết Tài Khoản Người Yêu (Couple Account Pairing)
+                Trạng Thái Ghép Đôi & Quản Lý Liên Kết (Couple Connection)
               </h4>
             </div>
-            {partnerAccountInfo?.username ? (
+            {partnerProfile ? (
               <span className="px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-xs font-bold border border-emerald-300 dark:border-emerald-800 flex items-center gap-1">
-                <Check className="w-3.5 h-3.5" /> Đã ghép đôi: @{partnerAccountInfo.username}
+                <Check className="w-3.5 h-3.5" /> Đã kết nối với: {partnerProfile.name || 'Người thương'}
               </span>
             ) : (
               <span className="px-3 py-1 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 text-xs font-bold border border-amber-300 dark:border-amber-800">
-                Chưa liên kết tài khoản đối phương
+                Chưa có người yêu tham gia phòng
               </span>
             )}
           </div>
 
-          {partnerAccountInfo?.username ? (
+          {partnerProfile ? (
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-2xl bg-white dark:bg-zinc-800/70 border border-rose-100 dark:border-zinc-700/60 shadow-xs">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-rose-400 to-pink-400 flex items-center justify-center text-white font-bold text-lg shadow-sm">
-                  {partnerAccountInfo.displayName?.[0]?.toUpperCase() || partnerAccountInfo.username[0].toUpperCase()}
+                <div className="w-12 h-12 rounded-full ring-2 ring-rose-400 overflow-hidden shadow-sm flex items-center justify-center bg-rose-100">
+                  <img
+                    src={partnerProfile.avatar || DEFAULT_AVATAR_ME}
+                    alt="Partner Avatar"
+                    className="w-full h-full object-cover"
+                  />
                 </div>
                 <div>
                   <div className="font-bold text-sm text-zinc-800 dark:text-zinc-100 flex items-center gap-1.5">
-                    <span>{partnerAccountInfo.displayName || partnerAccountInfo.username}</span>
-                    <span className="text-xs text-rose-500 font-mono">(@{partnerAccountInfo.username})</span>
+                    <span>{partnerProfile.name || 'Người thương'}</span>
+                    {partnerProfile.nickname && (
+                      <span className="text-xs text-rose-500 font-cute">({partnerProfile.nickname})</span>
+                    )}
+                    <span className="text-[11px] px-2 py-0.5 rounded-full font-medium ml-1">
+                      {isPartnerOnline ? (
+                        <span className="text-emerald-600 dark:text-emerald-400 font-bold">● Đang Online</span>
+                      ) : (
+                        <span className="text-zinc-400">○ Ngoại tuyến</span>
+                      )}
+                    </span>
                   </div>
-                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-cute">
-                    💖 Hai tài khoản đã liên kết vĩnh viễn. Khi một trong hai người đổi mã phòng, đối phương sẽ tự động được chuyển theo!
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-cute mt-0.5">
+                    {partnerProfile.statusText || 'Hai bạn đang kết nối chung phòng'}
                   </p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={handleUnlinkPartner}
-                className="px-3 py-1.5 text-xs text-zinc-500 hover:text-rose-600 dark:text-zinc-400 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-zinc-700 rounded-xl transition cursor-pointer self-end sm:self-center"
+                className="px-4 py-2 text-xs font-bold text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 border border-rose-200 dark:border-rose-800 rounded-xl transition cursor-pointer self-end sm:self-center shadow-xs flex items-center gap-1.5 active:scale-95"
               >
-                Hủy liên kết
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Hủy Liên Kết Đối Phương</span>
               </button>
             </div>
           ) : (
-            <form onSubmit={handleLinkPartner} className="space-y-2">
+            <div className="p-4 rounded-2xl bg-white dark:bg-zinc-800/70 border border-rose-100 dark:border-zinc-700/60 space-y-2">
               <p className="text-xs text-zinc-600 dark:text-zinc-300 font-cute leading-relaxed">
-                Nhập tên tài khoản của người yêu để liên kết 1-1. Sau khi liên kết, mọi thay đổi về mã phòng sẽ luôn đồng bộ 2 máy cùng nhau.
+                Để kết nối với người yêu, bạn chỉ cần gửi <strong>Mã Phòng</strong> ({settings.roomCode}) hoặc <strong>Link Ghép Đôi 1-Chạm</strong> ở phía trên. Khi đối phương truy cập, hệ thống sẽ tự động ghép đôi và lưu trữ thông tin hai bạn.
               </p>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={partnerUserInput}
-                  onChange={(e) => {
-                    setPartnerUserInput(e.target.value);
-                    if (linkError) setLinkError(null);
-                  }}
-                  placeholder="Nhập tên tài khoản của người yêu (ví dụ: hoanglong, thunhi)"
-                  className="flex-1 px-4 py-2.5 rounded-2xl bg-white dark:bg-zinc-800 border border-rose-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-[#FF758F] outline-hidden lowercase"
-                />
+              <div className="flex items-center gap-2 pt-1">
                 <button
-                  type="submit"
-                  disabled={isLinking || !partnerUserInput.trim()}
-                  className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white font-bold text-xs shadow-md shadow-rose-200 dark:shadow-none transition active:scale-95 cursor-pointer whitespace-nowrap disabled:opacity-50"
+                  type="button"
+                  onClick={handleCopyInviteLink}
+                  className="px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs shadow-sm transition active:scale-95 flex items-center gap-1.5"
                 >
-                  {isLinking ? 'Đang liên kết...' : 'Liên Kết Ngay 💑'}
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span>Sao Chép Link Ghép Đôi</span>
                 </button>
               </div>
-              {linkError && (
-                <p className="text-xs text-rose-600 dark:text-rose-400 font-cute font-medium">
-                  ⚠️ {linkError}
-                </p>
-              )}
-            </form>
+            </div>
           )}
         </div>
 
@@ -1104,31 +1117,18 @@ export const SettingsView: React.FC = () => {
           <div className="p-4 rounded-2xl bg-rose-50/50 dark:bg-zinc-800/40 border border-rose-100 dark:border-zinc-700/60 space-y-3">
             <div className="text-xs font-bold text-rose-600 dark:text-rose-400 flex items-center gap-1.5 font-cute">
               <span>🎂</span>
-              <span>Cập Nhật Ngày Sinh Nhật (Tự Động Tạo Sự Kiện Đếm Ngược)</span>
+              <span>Cập Nhật Ngày Sinh Nhật Của Bạn (Tự Động Tạo Sự Kiện Đếm Ngược)</span>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
-                  Ngày sinh của bạn:
-                </label>
-                <input
-                  type="date"
-                  value={birthday}
-                  onChange={(e) => setBirthday(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-rose-400"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
-                  Sinh nhật người yêu:
-                </label>
-                <input
-                  type="date"
-                  value={partnerBirthday}
-                  onChange={(e) => setPartnerBirthday(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-rose-400"
-                />
-              </div>
+            <div>
+              <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+                Ngày sinh của bạn:
+              </label>
+              <input
+                type="date"
+                value={birthday}
+                onChange={(e) => setBirthday(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-rose-400"
+              />
             </div>
           </div>
 
@@ -1139,11 +1139,116 @@ export const SettingsView: React.FC = () => {
               </span>
             ) : <div />}
 
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowPartnerModal(true)}
+                className="px-4 py-2.5 rounded-2xl bg-rose-50 hover:bg-rose-100 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-rose-600 dark:text-rose-300 border border-rose-200/70 dark:border-zinc-700 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <Heart className="w-3.5 h-3.5 fill-rose-500 text-rose-500" />
+                <span>Xem Hồ Sơ Người Ấy</span>
+              </button>
+
+              <button
+                type="submit"
+                className="px-6 py-2.5 rounded-2xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs shadow-md shadow-rose-200 dark:shadow-rose-950 transition active:scale-95 cursor-pointer"
+              >
+                Lưu Hồ Sơ 💖
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      {/* 5. DIRECT PASSWORD CHANGE CARD (No Old Password Required) */}
+      <div className={`rounded-3xl ${currentTheme.cardBg} border ${currentTheme.borderSubtle} p-5 sm:p-7 shadow-md`}>
+        <div className="flex items-center gap-2 mb-3">
+          <KeyRound className="w-5 h-5 text-rose-500" />
+          <h3 className="text-base sm:text-lg font-bold text-zinc-800 dark:text-zinc-100 font-cute">
+            Đổi Mật Khẩu Nhanh (Không Cần Mật Khẩu Cũ)
+          </h3>
+        </div>
+
+        <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-4 font-cute">
+          Bạn có thể thay đổi mật khẩu trực tiếp bất cứ lúc nào mà không cần nhớ lại mật khẩu cũ.
+        </p>
+
+        {pwdSuccessMsg && (
+          <div className="mb-4 p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs font-bold text-emerald-700 dark:text-emerald-300 font-cute flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+            <span>{pwdSuccessMsg}</span>
+          </div>
+        )}
+
+        {pwdErrorMsg && (
+          <div className="mb-4 p-3 rounded-2xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-xs font-bold text-red-600 dark:text-red-300 font-cute flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
+            <span>{pwdErrorMsg}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleChangePassword} className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1 font-cute">
+                Tên tài khoản *
+              </label>
+              <div className="relative">
+                <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                <input
+                  type="text"
+                  required
+                  placeholder="Nhập tên tài khoản..."
+                  value={pwdUsername}
+                  onChange={(e) => setPwdUsername(e.target.value)}
+                  className="w-full pl-10 pr-3 py-2.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs font-medium text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-rose-400"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1 font-cute">
+                Mật khẩu mới (tối thiểu 4 ký tự) *
+              </label>
+              <div className="relative">
+                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                <input
+                  type="password"
+                  required
+                  placeholder="Mật khẩu mới..."
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full pl-10 pr-3 py-2.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs font-medium text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-rose-400"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1 font-cute">
+                Xác nhận mật khẩu mới *
+              </label>
+              <div className="relative">
+                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                <input
+                  type="password"
+                  required
+                  placeholder="Nhập lại mật khẩu mới..."
+                  value={confirmNewPassword}
+                  onChange={(e) => setConfirmNewPassword(e.target.value)}
+                  className="w-full pl-10 pr-3 py-2.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs font-medium text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-rose-400"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-1">
             <button
               type="submit"
-              className="px-6 py-2.5 rounded-2xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs shadow-md shadow-rose-200 dark:shadow-rose-950 transition active:scale-95 cursor-pointer"
+              disabled={pwdLoading}
+              className="px-6 py-2.5 rounded-2xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs shadow-md shadow-rose-200 dark:shadow-rose-950 transition active:scale-95 cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
             >
-              Lưu Hồ Sơ 💖
+              <KeyRound className="w-3.5 h-3.5" />
+              <span>{pwdLoading ? 'Đang đổi...' : 'Cập Nhật Mật Khẩu Ngay 🔑'}</span>
             </button>
           </div>
         </form>
@@ -1309,6 +1414,12 @@ export const SettingsView: React.FC = () => {
           setRawImageForCrop(null);
         }}
         onCropComplete={handleCropComplete}
+      />
+
+      {/* Partner Profile Modal */}
+      <PartnerProfileModal
+        isOpen={showPartnerModal}
+        onClose={() => setShowPartnerModal(false)}
       />
     </div>
   );

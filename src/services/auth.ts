@@ -635,7 +635,51 @@ export async function saveGoogleDriveStatusService(params: {
   }
 }
 
-// 12. Reset and Clear All System & Server Data
+// 12. Change Password without Old Password
+export async function changePasswordWithoutOld(
+  username: string,
+  newPassword: string
+): Promise<{ success: boolean; message: string }> {
+  const cleanUsername = username.trim().toLowerCase();
+  const cleanPass = newPassword.trim();
+
+  if (!cleanUsername) {
+    throw new Error('Vui lòng nhập tên tài khoản.');
+  }
+  if (!cleanPass || cleanPass.length < 4) {
+    throw new Error('Mật khẩu mới cần tối thiểu 4 ký tự.');
+  }
+
+  // 1. Call server endpoint
+  const res = await fetch('/api/auth/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: cleanUsername,
+      newPassword: cleanPass,
+    }),
+  });
+
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || 'Không thể đổi mật khẩu. Vui lòng kiểm tra lại tên tài khoản.');
+  }
+
+  // 2. Update local web accounts cache
+  const webAccounts = getStoredWebAccounts();
+  if (webAccounts[cleanUsername]) {
+    webAccounts[cleanUsername].passwordHash = hashPassword(cleanPass);
+    webAccounts[cleanUsername].updatedAt = Date.now();
+    saveStoredWebAccounts(webAccounts);
+  }
+
+  return {
+    success: true,
+    message: data.message || `Đã đổi mật khẩu cho tài khoản "${cleanUsername}" thành công!`,
+  };
+}
+
+// 13. Reset and Clear All System & Server Data
 export async function clearAllSystemDataService(): Promise<void> {
   try {
     await fetch('/api/system/clear-all-data', {

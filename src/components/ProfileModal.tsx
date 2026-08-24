@@ -15,7 +15,7 @@ interface ProfileModalProps {
 }
 
 export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) => {
-  const { myProfile, updateMyProfile, settings, updateSettings } = useCouple();
+  const { myProfile, updateMyProfile } = useCouple();
 
   const [name, setName] = useState(myProfile.name);
   const [nickname, setNickname] = useState(myProfile.nickname);
@@ -24,7 +24,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
   const [statusText, setStatusText] = useState(myProfile.statusText || '');
   const [locationEmoji, setLocationEmoji] = useState(myProfile.locationEmoji || '📍 Việt Nam');
   const [birthday, setBirthday] = useState(myProfile.birthday || '');
-  const [partnerBirthday, setPartnerBirthday] = useState(settings.partnerBirthday || '');
   const [isSaving, setIsSaving] = useState(false);
   const [success, setSuccess] = useState(false);
 
@@ -77,12 +76,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
       locationEmoji: locationEmoji.trim(),
       birthday: birthday || undefined,
     });
-
-    if (partnerBirthday !== settings.partnerBirthday) {
-      updateSettings({
-        partnerBirthday: partnerBirthday || undefined,
-      });
-    }
 
     setSuccess(true);
     setTimeout(() => {
@@ -260,31 +253,15 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
           <div className="p-3 rounded-2xl bg-rose-50/60 dark:bg-zinc-800/50 border border-rose-100 dark:border-zinc-700 space-y-2.5">
             <label className="block text-xs font-bold text-rose-600 dark:text-rose-400 font-cute flex items-center gap-1.5">
               <span>🎂</span>
-              <span>Cập Nhật Ngày Sinh (Tự động vào sự kiện)</span>
+              <span>Cập Nhật Ngày Sinh Của Bạn (Tự động vào sự kiện)</span>
             </label>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <span className="block text-[10px] text-zinc-500 dark:text-zinc-400 mb-1 font-medium">
-                  Ngày sinh của bạn:
-                </span>
-                <input
-                  type="date"
-                  value={birthday}
-                  onChange={(e) => setBirthday(e.target.value)}
-                  className="w-full px-2.5 py-1.5 rounded-xl bg-white dark:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700 focus:ring-2 focus:ring-rose-400"
-                />
-              </div>
-              <div>
-                <span className="block text-[10px] text-zinc-500 dark:text-zinc-400 mb-1 font-medium">
-                  Sinh nhật người yêu:
-                </span>
-                <input
-                  type="date"
-                  value={partnerBirthday}
-                  onChange={(e) => setPartnerBirthday(e.target.value)}
-                  className="w-full px-2.5 py-1.5 rounded-xl bg-white dark:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700 focus:ring-2 focus:ring-rose-400"
-                />
-              </div>
+            <div>
+              <input
+                type="date"
+                value={birthday}
+                onChange={(e) => setBirthday(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700 focus:ring-2 focus:ring-rose-400"
+              />
             </div>
           </div>
 

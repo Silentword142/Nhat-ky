@@ -4,6 +4,7 @@ import { useCouple } from '../context/CoupleContext';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { ProfileModal } from './ProfileModal';
+import { PartnerProfileModal } from './PartnerProfileModal';
 import { AuthModal } from './AuthModal';
 import { DEFAULT_AVATAR_ME, DEFAULT_AVATAR_PARTNER } from '../services/mockData';
 
@@ -26,6 +27,7 @@ export const Header: React.FC = () => {
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showPartnerProfileModal, setShowPartnerProfileModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [isInstalled, setIsInstalled] = useState(false);
@@ -409,7 +411,14 @@ export const Header: React.FC = () => {
                         ({partnerProfile.nickname})
                       </span>
                     )}
-                    <h3 className="font-serif italic font-bold text-zinc-900 dark:text-zinc-50 text-lg sm:text-xl">
+                    <h3
+                      onClick={() => {
+                        soundService.playPop();
+                        setShowPartnerProfileModal(true);
+                      }}
+                      className="font-serif italic font-bold text-zinc-900 dark:text-zinc-50 text-lg sm:text-xl cursor-pointer hover:opacity-80 transition"
+                      title="Bấm để xem thông tin người ấy 💖"
+                    >
                       {partnerProfile.name || 'Người thương'}
                     </h3>
                   </div>
@@ -427,15 +436,31 @@ export const Header: React.FC = () => {
                         <span className="text-zinc-400">Ngoại tuyến</span>
                       )}
                     </span>
-                    <span>{partnerProfile.locationEmoji || '📍 Chưa cập nhật'}</span>
+                    <button
+                      onClick={() => {
+                        soundService.playPop();
+                        setShowPartnerProfileModal(true);
+                      }}
+                      className="hover:underline flex items-center gap-0.5 font-bold cursor-pointer"
+                      style={{ color: currentTheme.primaryColor }}
+                    >
+                      <span>Xem hồ sơ</span>
+                    </button>
                   </div>
                 </div>
 
-                <div className="relative">
+                <div
+                  onClick={() => {
+                    soundService.playPop();
+                    setShowPartnerProfileModal(true);
+                  }}
+                  className="relative group cursor-pointer"
+                  title="Bấm để xem hồ sơ và gửi yêu thương đến người ấy 💖"
+                >
                   <img
                     src={partnerProfile.avatar || DEFAULT_AVATAR_PARTNER}
                     alt={partnerProfile.name || 'Partner'}
-                    className="w-14 h-14 sm:w-16 sm:h-16 rounded-full object-cover shadow-lg"
+                    className="w-14 h-14 sm:w-16 sm:h-16 rounded-full object-cover shadow-lg group-hover:scale-105 transition duration-300 ring-2 ring-rose-300/50 dark:ring-rose-700/50"
                     style={{
                       boxShadow: `0 0 0 3px ${currentTheme.secondaryColor}55`,
                     }}
@@ -575,6 +600,12 @@ export const Header: React.FC = () => {
       <ProfileModal
         isOpen={showProfileModal}
         onClose={() => setShowProfileModal(false)}
+      />
+
+      {/* Partner Profile View Modal */}
+      <PartnerProfileModal
+        isOpen={showPartnerProfileModal}
+        onClose={() => setShowPartnerProfileModal(false)}
       />
 
       {/* User Account & Login / Register Modal */}

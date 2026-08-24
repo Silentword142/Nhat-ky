@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer base {
   :root {
     --font-sans: 'Nunito', 'Be Vietnam Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -10,10 +12,17 @@
     color-scheme: light;
   }
 
-  :root.dark {
-    color-scheme: dark;
+  :root:not(.dark) {
+    color-scheme: light !important;
+  }
+
+  :root.dark,
+  html.dark {
+    color-scheme: dark !important;
   }
   
+  html:not(.dark) body,
+  :root:not(.dark) body,
   body {
     font-family: var(--font-cute), var(--font-sans);
     -webkit-tap-highlight-color: transparent;
@@ -24,9 +33,35 @@
   }
 
   .dark body,
+  html.dark body,
   :root.dark body {
-    background-color: #151019;
+    background-color: #151019 !important;
+    color: #f4effa !important;
+  }
+
+  .dark h1, .dark h2, .dark h3, .dark h4, .dark h5, .dark h6 {
     color: #f4effa;
+  }
+
+  .dark p, .dark span, .dark label, .dark div {
+    /* Ensure child text isn't stuck as dark gray or black */
+  }
+
+  .dark input, .dark textarea, .dark select {
+    color: #f4effa;
+  }
+
+  /* Specific fix for elements hardcoded with #333 or text-zinc-900 in dark mode */
+  .dark .text-\[\#333\],
+  .dark .text-\[\#444\],
+  .dark .text-\[\#222\] {
+    color: #f4effa !important;
+  }
+
+  .dark .text-\[\#888\],
+  .dark .text-\[\#666\],
+  .dark .text-\[\#555\] {
+    color: #cbd5e1 !important;
   }
 
   /* Cross-platform iOS WebKit and Android form normalization */

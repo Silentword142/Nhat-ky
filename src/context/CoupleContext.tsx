@@ -604,19 +604,11 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const nowTime = Date.now();
           setIsPartnerOnline(nowTime - (p.lastActive || 0) < 60000);
         } else {
-          // No partner in this room -> clear partner from UI & storage
-          setPartnerProfileState(null);
-          try {
-            localStorage.removeItem(`${STORAGE_KEY_PREFIX}partner_profile`);
-          } catch {}
+          // Partner not currently in payload (offline), keep existing partner profile if available
           setIsPartnerOnline(false);
           setIsPartnerTyping(false);
         }
       } else {
-        setPartnerProfileState(null);
-        try {
-          localStorage.removeItem(`${STORAGE_KEY_PREFIX}partner_profile`);
-        } catch {}
         setIsPartnerOnline(false);
         setIsPartnerTyping(false);
       }
@@ -706,11 +698,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           if (data.exists && data.room) {
             applyIncomingRoomData(data.room, 'express_rest');
           } else {
-            // Room does not exist or is brand new/empty
-            setPartnerProfileState(null);
-            try {
-              localStorage.removeItem(`${STORAGE_KEY_PREFIX}partner_profile`);
-            } catch {}
+            // Room does not exist or transient state: mark offline but keep paired profile
             setIsPartnerOnline(false);
             setIsPartnerTyping(false);
           }
