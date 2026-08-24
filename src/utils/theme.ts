@@ -1,5 +1,7 @@
+import { ThemeType } from '../types';
+
 export interface ThemeDefinition {
-  id: 'sakura' | 'twilight' | 'lavender' | 'peach' | 'matcha' | 'mocha';
+  id: ThemeType;
   name: string;
   emoji: string;
   description: string;
@@ -13,9 +15,10 @@ export interface ThemeDefinition {
   heartColor: string;
   borderSubtle: string;
   glowColor: string;
+  isHighContrast?: boolean;
 }
 
-export const THEMES: Record<string, ThemeDefinition> = {
+export const THEMES: Record<ThemeType, ThemeDefinition> = {
   sakura: {
     id: 'sakura',
     name: 'Artistic Flair (Hoa Hồng)',
@@ -25,16 +28,117 @@ export const THEMES: Record<string, ThemeDefinition> = {
     primaryColor: '#FF758F',
     secondaryColor: '#FF9A9E',
     bgGradient: 'from-[#FFF5F7] via-[#FFF9FA] to-[#FFF0F4] dark:from-[#151019] dark:via-[#1c1522] dark:to-[#120d16]',
-    cardBg: 'bg-white/85 dark:bg-[#1f1725]/85 backdrop-blur-md',
+    cardBg: 'bg-white/90 dark:bg-[#1f1725]/90 backdrop-blur-md',
     accentBadge: 'bg-[#FFF5F7] text-[#FF758F] border border-[#FFE4E9] dark:bg-[#2b1e32] dark:text-[#FF9A9E] dark:border-[#3d2746]',
     activeTab: 'bg-gradient-to-r from-[#FF758F] to-[#FF9A9E] text-white shadow-lg shadow-rose-200/60 dark:shadow-rose-950',
     heartColor: 'text-[#FF758F]',
     borderSubtle: 'border-[#FFE4E9] dark:border-[#38263e]',
     glowColor: 'rgba(255, 117, 143, 0.4)',
   },
+  high_contrast_light: {
+    id: 'high_contrast_light',
+    name: 'Pure Daylight (Tương Phản Cao)',
+    emoji: '☀️',
+    description: 'Nền sáng siêu nét, chữ đen đậm nét #111, viền rõ ràng dễ đọc',
+    previewBg: 'bg-white border-2 border-zinc-900',
+    primaryColor: '#000000',
+    secondaryColor: '#e11d48',
+    bgGradient: 'from-white via-zinc-50 to-zinc-100 dark:from-zinc-900 dark:via-zinc-950 dark:to-black',
+    cardBg: 'bg-white dark:bg-zinc-900 text-zinc-950 dark:text-white shadow-lg',
+    accentBadge: 'bg-zinc-100 text-zinc-900 border-2 border-zinc-900 dark:bg-zinc-800 dark:text-white dark:border-white font-bold',
+    activeTab: 'bg-zinc-950 text-white dark:bg-white dark:text-zinc-950 font-extrabold shadow-md',
+    heartColor: 'text-rose-600',
+    borderSubtle: 'border-zinc-300 dark:border-zinc-700',
+    glowColor: 'rgba(0, 0, 0, 0.25)',
+    isHighContrast: true,
+  },
+  high_contrast_oled: {
+    id: 'high_contrast_oled',
+    name: 'OLED Midnight (Tương Phản Cao)',
+    emoji: '🌌',
+    description: 'Nền đen tuyền #000000, chữ trắng #FFF siêu sáng, tiết kiệm pin OLED',
+    previewBg: 'bg-black border border-zinc-700',
+    primaryColor: '#f43f5e',
+    secondaryColor: '#38bdf8',
+    bgGradient: 'from-black via-[#080808] to-black dark:from-black dark:via-[#050505] dark:to-black',
+    cardBg: 'bg-[#0f0f10] text-white border border-zinc-800 backdrop-blur-md',
+    accentBadge: 'bg-zinc-900 text-rose-400 border border-zinc-700 font-bold',
+    activeTab: 'bg-gradient-to-r from-rose-500 to-pink-500 text-white font-bold shadow-md shadow-rose-900/50',
+    heartColor: 'text-rose-500',
+    borderSubtle: 'border-zinc-800',
+    glowColor: 'rgba(244, 63, 94, 0.4)',
+    isHighContrast: true,
+  },
+  velvet_wine: {
+    id: 'velvet_wine',
+    name: 'Velvet Crimson (Vang Đỏ Quý Phái)',
+    emoji: '🍷',
+    description: 'Đỏ Bordeaux trầm đậm, chữ trắng ngà sang trọng & quý phái',
+    previewBg: 'bg-[#881337]',
+    primaryColor: '#be123c',
+    secondaryColor: '#e11d48',
+    bgGradient: 'from-[#fff1f2] via-[#ffe4e6]/50 to-[#fecdd3]/40 dark:from-[#2e0513] dark:via-[#4c0519] dark:to-[#1f030d]',
+    cardBg: 'bg-white/90 dark:bg-[#380716]/90 backdrop-blur-md',
+    accentBadge: 'bg-[#ffe4e6] text-[#9f1239] border border-[#fecdd3] dark:bg-[#4c0519] dark:text-[#fecdd3]',
+    activeTab: 'bg-gradient-to-r from-[#9f1239] to-[#be123c] text-white shadow-lg shadow-rose-900/30',
+    heartColor: 'text-[#e11d48]',
+    borderSubtle: 'border-[#fecdd3] dark:border-[#5c0821]',
+    glowColor: 'rgba(190, 18, 60, 0.4)',
+    isHighContrast: true,
+  },
+  ocean_sapphire: {
+    id: 'ocean_sapphire',
+    name: 'Ocean Sapphire (Đại Dương Biển Sâu)',
+    emoji: '🌊',
+    description: 'Xanh lam đại dương sâu thẳm, độ tương phản sắc sảo & êm dịu',
+    previewBg: 'bg-[#0369a1]',
+    primaryColor: '#0284c7',
+    secondaryColor: '#38bdf8',
+    bgGradient: 'from-[#f0f9ff] via-[#e0f2fe]/50 to-[#bae6fd]/30 dark:from-[#082f49] dark:via-[#0c4a6e] dark:to-[#031d30]',
+    cardBg: 'bg-white/90 dark:bg-[#073655]/90 backdrop-blur-md',
+    accentBadge: 'bg-[#e0f2fe] text-[#0369a1] border border-[#bae6fd] dark:bg-[#0c4a6e] dark:text-[#7dd3fc]',
+    activeTab: 'bg-gradient-to-r from-[#0284c7] to-[#0369a1] text-white shadow-lg shadow-sky-900/30',
+    heartColor: 'text-[#0284c7]',
+    borderSubtle: 'border-[#bae6fd] dark:border-[#0c4a6e]',
+    glowColor: 'rgba(2, 132, 199, 0.4)',
+    isHighContrast: true,
+  },
+  nordic_minimal: {
+    id: 'nordic_minimal',
+    name: 'Nordic Mono (Tối Giản Bắc Âu)',
+    emoji: '📜',
+    description: 'Phong cách than chì & giấy trắng chuẩn editorial, cực kỳ rõ ràng',
+    previewBg: 'bg-zinc-200 border border-zinc-400',
+    primaryColor: '#27272a',
+    secondaryColor: '#52525b',
+    bgGradient: 'from-[#f8fafc] via-[#f1f5f9] to-[#e2e8f0] dark:from-[#09090b] dark:via-[#18181b] dark:to-[#121215]',
+    cardBg: 'bg-white/95 dark:bg-[#18181b]/95 backdrop-blur-md',
+    accentBadge: 'bg-zinc-100 text-zinc-800 border border-zinc-300 dark:bg-zinc-800 dark:text-zinc-200 dark:border-zinc-700 font-semibold',
+    activeTab: 'bg-gradient-to-r from-zinc-800 to-zinc-900 text-white shadow-md',
+    heartColor: 'text-zinc-800 dark:text-zinc-200',
+    borderSubtle: 'border-zinc-200 dark:border-zinc-800',
+    glowColor: 'rgba(39, 39, 42, 0.3)',
+    isHighContrast: true,
+  },
+  emerald_forest: {
+    id: 'emerald_forest',
+    name: 'Emerald Forest (Rừng Ngọc Bích)',
+    emoji: '🌲',
+    description: 'Xanh lục bảo ngọc bích sang trọng, tươi mát & dịu lành',
+    previewBg: 'bg-[#065f46]',
+    primaryColor: '#059669',
+    secondaryColor: '#10b981',
+    bgGradient: 'from-[#ecfdf5] via-[#d1fae5]/50 to-[#a7f3d0]/30 dark:from-[#062c21] dark:via-[#064e3b] dark:to-[#021f17]',
+    cardBg: 'bg-white/90 dark:bg-[#073d2f]/90 backdrop-blur-md',
+    accentBadge: 'bg-[#d1fae5] text-[#065f46] border border-[#a7f3d0] dark:bg-[#064e3b] dark:text-[#6ee7b7]',
+    activeTab: 'bg-gradient-to-r from-[#059669] to-[#047857] text-white shadow-lg shadow-emerald-900/30',
+    heartColor: 'text-[#059669]',
+    borderSubtle: 'border-[#a7f3d0] dark:border-[#064e3b]',
+    glowColor: 'rgba(5, 150, 105, 0.4)',
+  },
   twilight: {
     id: 'twilight',
-    name: 'Midnight Twilight',
+    name: 'Midnight Twilight (Đêm Sao)',
     emoji: '🌙',
     description: 'Đêm sao lãng mạn, huyền ảo & êm dịu mắt',
     previewBg: 'bg-indigo-900',
@@ -50,7 +154,7 @@ export const THEMES: Record<string, ThemeDefinition> = {
   },
   lavender: {
     id: 'lavender',
-    name: 'Lavender Dream',
+    name: 'Lavender Dream (Tím Oải Hương)',
     emoji: '💜',
     description: 'Tím hoa oải hương mộng mơ, thanh khiết',
     previewBg: 'bg-[#E9D5FF]',
@@ -66,7 +170,7 @@ export const THEMES: Record<string, ThemeDefinition> = {
   },
   peach: {
     id: 'peach',
-    name: 'Peach Sunset',
+    name: 'Peach Sunset (Cam Đào)',
     emoji: '🍑',
     description: 'Cam đào hoàng hôn ấm áp & tươi sáng',
     previewBg: 'bg-orange-100',
@@ -82,7 +186,7 @@ export const THEMES: Record<string, ThemeDefinition> = {
   },
   matcha: {
     id: 'matcha',
-    name: 'Matcha Cozy',
+    name: 'Matcha Cozy (Trà Bơ)',
     emoji: '🍵',
     description: 'Xanh bơ trà xanh thanh lịch, yên bình',
     previewBg: 'bg-emerald-100',
@@ -98,7 +202,7 @@ export const THEMES: Record<string, ThemeDefinition> = {
   },
   mocha: {
     id: 'mocha',
-    name: 'Mocha Milk Tea',
+    name: 'Mocha Milk Tea (Trà Sữa)',
     emoji: '🍫',
     description: 'Nâu trà sữa vintage ấm cúng & cổ điển',
     previewBg: 'bg-amber-100',

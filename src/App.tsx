@@ -20,6 +20,17 @@ const MainAppContent: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabType>('diary');
   const currentTheme = THEMES[settings.theme] || THEMES.sakura;
 
+  // Explicitly manage dark mode class on document and body without phone OS interference
+  useEffect(() => {
+    if (settings.isDarkMode) {
+      document.documentElement.classList.add('dark');
+      document.body.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      document.body.classList.remove('dark');
+    }
+  }, [settings.isDarkMode]);
+
   // Initialize sound on first user gesture
   useEffect(() => {
     const handleFirstInteraction = () => {
@@ -38,9 +49,9 @@ const MainAppContent: React.FC = () => {
 
   return (
     <div
-      className={`min-h-screen transition-colors duration-500 font-sans relative overflow-x-hidden ${
-        settings.isDarkMode ? 'dark bg-[#151019] text-[#f4effa]' : 'bg-[#FFF5F7] text-[#4A4A4A]'
-      }`}
+      className={`min-h-screen transition-colors duration-500 font-sans relative overflow-x-hidden bg-gradient-to-br ${
+        currentTheme.bgGradient
+      } ${settings.isDarkMode ? 'dark text-[#f4effa]' : 'text-[#2d2d2d]'}`}
     >
       {/* Artistic Flair Atmospheric Ambient Glows */}
       <div className="fixed top-[-100px] right-[-100px] w-96 h-96 bg-[#FFD8E4] dark:bg-[#3d1a29]/40 rounded-full blur-3xl opacity-70 pointer-events-none z-0 animate-pulse" style={{ animationDuration: '9s' }} />

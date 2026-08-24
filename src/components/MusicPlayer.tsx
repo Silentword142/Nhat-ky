@@ -54,6 +54,29 @@ export const MusicPlayer: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'search' | 'playlist' | 'youtube_hub' | 'add'>('search');
 
+  // Minimized floating widget mode (Bubble mode for mobile/desktop to save screen space)
+  const [isWidgetMinimized, setIsWidgetMinimized] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('lovesync_music_widget_minimized');
+      if (saved !== null) return JSON.parse(saved);
+      if (typeof window !== 'undefined' && window.innerWidth < 640) {
+        return true;
+      }
+    } catch {}
+    return false;
+  });
+
+  const toggleWidgetMinimized = (val?: boolean) => {
+    soundService.playPop();
+    setIsWidgetMinimized((prev) => {
+      const next = typeof val === 'boolean' ? val : !prev;
+      try {
+        localStorage.setItem('lovesync_music_widget_minimized', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
   // YouTube live search state
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
@@ -181,7 +204,7 @@ export const MusicPlayer: React.FC = () => {
   return (
     <>
       {/* ========================================================================= */}
-      {/* 1. DRAGGABLE FLOATING MINI PLAYER WIDGET                                  */}
+      {/* 1. DRAGGABLE FLOATING MINI PLAYER WIDGET (MINIMIZE & EXPAND MODES)        */}
       {/* ========================================================================= */}
       <motion.div
         drag
@@ -190,125 +213,188 @@ export const MusicPlayer: React.FC = () => {
         whileDrag={{ scale: 1.05, cursor: 'grabbing', zIndex: 60 }}
         initial={{ scale: 0.9, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
-        className="fixed bottom-20 right-3 sm:bottom-6 sm:right-6 z-40 touch-none"
+        className="fixed bottom-20 right-3 sm:bottom-6 sm:right-6 z-40 touch-none select-none"
       >
-        <div className="flex items-center gap-1.5 p-2 rounded-full bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md shadow-2xl border border-rose-200/90 dark:border-zinc-700/90 hover:border-rose-400 dark:hover:border-rose-500/50 transition-all select-none">
-          {/* Drag Grip Handle */}
-          <div
-            className="pl-1 pr-0.5 text-zinc-400 hover:text-rose-500 dark:text-zinc-500 dark:hover:text-rose-400 cursor-grab active:cursor-grabbing flex items-center justify-center"
-            title="Nhấn giữ và kéo thả để di chuyển vị trí phát nhạc khắp màn hình"
-          >
-            <GripVertical className="w-3.5 h-3.5" />
-          </div>
-
-          {/* Vinyl Disc / Thumbnail Album Art */}
-          <button
-            onClick={() => {
-              soundService.playPop();
-              setIsPlayerOpen(true);
-            }}
-            className="relative w-11 h-11 rounded-full overflow-hidden shrink-0 shadow-inner group cursor-pointer"
-            title="Mở trình phát nhạc tình yêu"
-          >
-            {/* Spinning Vinyl Texture */}
-            <motion.div
-              animate={{ rotate: isPlaying ? 360 : 0 }}
-              transition={{ repeat: Infinity, duration: 6, ease: 'linear' }}
-              className="w-full h-full rounded-full bg-zinc-900 flex items-center justify-center p-1 border-2 border-zinc-800"
-            >
-              {currentTrack?.coverImage ? (
-                <img
-                  src={currentTrack.coverImage}
-                  alt="cover"
-                  className="w-full h-full rounded-full object-cover"
-                />
-              ) : (
-                <Disc3 className="w-6 h-6 text-rose-400" />
-              )}
-            </motion.div>
-
-            <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition rounded-full">
-              <Maximize2 className="w-4 h-4 text-white" />
-            </div>
-          </button>
-
-          {/* Song Info & Controls */}
-          <div className="flex flex-col pr-1 max-w-[200px] sm:max-w-[250px]">
-            <button
-              onClick={() => {
-                soundService.playPop();
-                setIsPlayerOpen(true);
-              }}
-              className="text-left group cursor-pointer"
-            >
-              <div className="flex items-center gap-1">
-                {currentIsYouTube && <Youtube className="w-3 h-3 text-red-500 shrink-0" />}
-                <p className="text-xs font-bold text-zinc-800 dark:text-zinc-100 truncate group-hover:text-rose-500 transition">
-                  {currentTrack?.title || 'Chưa chọn bài hát'}
-                </p>
-              </div>
-              <p className="text-[10px] text-zinc-400 truncate">
-                {currentTrack?.artist || 'LoveSync Music'}
-              </p>
-            </button>
-
-            {/* Quick Play/Pause & Next buttons & Volume */}
-            <div className="flex items-center gap-0.5 mt-0.5">
-              <button
-                onClick={prevTrack}
-                className="p-1 text-zinc-500 hover:text-rose-500 rounded-full transition cursor-pointer shrink-0"
-                title="Bài trước"
-              >
-                <SkipBack className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={togglePlay}
-                className="p-1.5 rounded-full bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow-xs hover:scale-105 transition active:scale-95 cursor-pointer shrink-0"
-                title={isPlaying ? 'Tạm dừng' : 'Phát nhạc'}
-              >
-                {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
-              </button>
-              <button
-                onClick={nextTrack}
-                className="p-1 text-zinc-500 hover:text-rose-500 rounded-full transition cursor-pointer shrink-0"
-                title="Bài tiếp theo"
-              >
-                <SkipForward className="w-3.5 h-3.5" />
-              </button>
-
-              <div className="w-px h-3 bg-zinc-200 dark:bg-zinc-700 mx-1 shrink-0"></div>
-
-              <button
-                onClick={toggleMute}
-                className="p-1 text-zinc-500 hover:text-rose-500 rounded-full transition cursor-pointer shrink-0"
-                title={isMuted ? 'Bật âm thanh' : 'Tắt tiếng'}
-              >
-                {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-500" /> : <Volume2 className="w-3.5 h-3.5" />}
-              </button>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={isMuted ? 0 : volume}
-                onChange={(e) => setVolumeLevel(Number(e.target.value))}
-                className="w-12 sm:w-16 accent-rose-500 h-1 bg-zinc-200 dark:bg-zinc-700 rounded-lg cursor-pointer shrink-0"
-                title="Âm lượng"
-              />
-
+        {isWidgetMinimized ? (
+          /* ========================================================= */
+          /* CHẾ ĐỘ THU NHỎ (COMPACT ĐĨA NHẠC MINI TRÒN TINH GỌN)     */
+          /* ========================================================= */
+          <div className="relative group flex items-center">
+            <div className="relative flex items-center p-1 rounded-full bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md shadow-2xl border border-rose-200/90 dark:border-zinc-700/90 hover:border-rose-400 dark:hover:border-rose-500/50 transition-all">
+              {/* Spinning Vinyl Mini Disc */}
               <button
                 onClick={() => {
                   soundService.playPop();
                   setIsPlayerOpen(true);
                 }}
-                className="p-1 text-rose-500 hover:text-rose-600 rounded-full transition cursor-pointer shrink-0 ml-1"
-                title="Mở danh sách nhạc"
+                className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-full overflow-hidden shrink-0 shadow-lg group/disc cursor-pointer active:scale-95 transition-transform"
+                title={`Đang phát: ${currentTrack?.title || 'LoveSync Music'} (Bấm để mở trình phát)`}
               >
-                <ListMusic className="w-3.5 h-3.5" />
+                <motion.div
+                  animate={{ rotate: isPlaying ? 360 : 0 }}
+                  transition={{ repeat: Infinity, duration: 6, ease: 'linear' }}
+                  className="w-full h-full rounded-full bg-zinc-950 flex items-center justify-center p-1.5 border-2 border-zinc-800 shadow-inner"
+                >
+                  {/* Vinyl grooves rings */}
+                  <div className="absolute inset-2 rounded-full border border-zinc-800/80 pointer-events-none" />
+                  <div className="absolute inset-3 rounded-full border border-zinc-800/60 pointer-events-none" />
+
+                  {currentTrack?.coverImage ? (
+                    <img
+                      src={currentTrack.coverImage}
+                      alt="cover"
+                      className="w-full h-full rounded-full object-cover ring-1 ring-zinc-700"
+                    />
+                  ) : (
+                    <Disc3 className="w-7 h-7 text-rose-400" />
+                  )}
+
+                  {/* Vinyl Center Hole */}
+                  <div className="absolute w-3 h-3 rounded-full bg-zinc-900 border-2 border-zinc-950 shadow-xs" />
+                </motion.div>
+
+                {/* Center hover overlay */}
+                <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover/disc:opacity-100 transition rounded-full">
+                  <Maximize2 className="w-4 h-4 text-white drop-shadow-md" />
+                </div>
               </button>
             </div>
           </div>
-        </div>
+        ) : (
+          /* ========================================================= */
+          /* CHẾ ĐỘ THANH NỔI ĐẦY ĐỦ (EXPANDED FLOATING BAR)           */
+          /* ========================================================= */
+          <div className="flex items-center gap-1.5 p-2 rounded-full bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md shadow-2xl border border-rose-200/90 dark:border-zinc-700/90 hover:border-rose-400 dark:hover:border-rose-500/50 transition-all select-none">
+            {/* Drag Grip Handle */}
+            <div
+              className="pl-1 pr-0.5 text-zinc-400 hover:text-rose-500 dark:text-zinc-500 dark:hover:text-rose-400 cursor-grab active:cursor-grabbing flex items-center justify-center"
+              title="Nhấn giữ và kéo thả để di chuyển vị trí phát nhạc khắp màn hình"
+            >
+              <GripVertical className="w-3.5 h-3.5" />
+            </div>
+
+            {/* Vinyl Disc / Thumbnail Album Art */}
+            <button
+              onClick={() => {
+                soundService.playPop();
+                setIsPlayerOpen(true);
+              }}
+              className="relative w-11 h-11 rounded-full overflow-hidden shrink-0 shadow-inner group cursor-pointer"
+              title="Mở trình phát nhạc tình yêu"
+            >
+              {/* Spinning Vinyl Texture */}
+              <motion.div
+                animate={{ rotate: isPlaying ? 360 : 0 }}
+                transition={{ repeat: Infinity, duration: 6, ease: 'linear' }}
+                className="w-full h-full rounded-full bg-zinc-900 flex items-center justify-center p-1 border-2 border-zinc-800"
+              >
+                {currentTrack?.coverImage ? (
+                  <img
+                    src={currentTrack.coverImage}
+                    alt="cover"
+                    className="w-full h-full rounded-full object-cover"
+                  />
+                ) : (
+                  <Disc3 className="w-6 h-6 text-rose-400" />
+                )}
+              </motion.div>
+
+              <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition rounded-full">
+                <Maximize2 className="w-4 h-4 text-white" />
+              </div>
+            </button>
+
+            {/* Song Info & Controls */}
+            <div className="flex flex-col pr-1 max-w-[170px] sm:max-w-[240px]">
+              <button
+                onClick={() => {
+                  soundService.playPop();
+                  setIsPlayerOpen(true);
+                }}
+                className="text-left group cursor-pointer"
+              >
+                <div className="flex items-center gap-1">
+                  {currentIsYouTube && <Youtube className="w-3 h-3 text-red-500 shrink-0" />}
+                  <p className="text-xs font-bold text-zinc-800 dark:text-zinc-100 truncate group-hover:text-rose-500 transition">
+                    {currentTrack?.title || 'Chưa chọn bài hát'}
+                  </p>
+                </div>
+                <p className="text-[10px] text-zinc-400 truncate">
+                  {currentTrack?.artist || 'LoveSync Music'}
+                </p>
+              </button>
+
+              {/* Quick Play/Pause & Next buttons & Volume */}
+              <div className="flex items-center gap-0.5 mt-0.5">
+                <button
+                  onClick={prevTrack}
+                  className="p-1 text-zinc-500 hover:text-rose-500 rounded-full transition cursor-pointer shrink-0"
+                  title="Bài trước"
+                >
+                  <SkipBack className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={togglePlay}
+                  className="p-1.5 rounded-full bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow-xs hover:scale-105 transition active:scale-95 cursor-pointer shrink-0"
+                  title={isPlaying ? 'Tạm dừng bài hát' : 'Phát nhạc'}
+                >
+                  {isPlaying ? (
+                    <Pause className="w-3.5 h-3.5" />
+                  ) : (
+                    <Play className="w-3.5 h-3.5 fill-current translate-x-0.2" />
+                  )}
+                </button>
+                <button
+                  onClick={nextTrack}
+                  className="p-1 text-zinc-500 hover:text-rose-500 rounded-full transition cursor-pointer shrink-0"
+                  title="Bài tiếp theo"
+                >
+                  <SkipForward className="w-3.5 h-3.5" />
+                </button>
+
+                <div className="w-px h-3 bg-zinc-200 dark:bg-zinc-700 mx-1 shrink-0"></div>
+
+                <button
+                  onClick={toggleMute}
+                  className="p-1 text-zinc-500 hover:text-rose-500 rounded-full transition cursor-pointer shrink-0"
+                  title={isMuted ? 'Bật âm thanh' : 'Tắt tiếng'}
+                >
+                  {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-500" /> : <Volume2 className="w-3.5 h-3.5" />}
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={isMuted ? 0 : volume}
+                  onChange={(e) => setVolumeLevel(Number(e.target.value))}
+                  className="w-10 sm:w-16 accent-rose-500 h-1 bg-zinc-200 dark:bg-zinc-700 rounded-lg cursor-pointer shrink-0"
+                  title="Âm lượng"
+                />
+
+                <button
+                  onClick={() => {
+                    soundService.playPop();
+                    setIsPlayerOpen(true);
+                  }}
+                  className="p-1 text-rose-500 hover:text-rose-600 rounded-full transition cursor-pointer shrink-0 ml-0.5"
+                  title="Mở danh sách nhạc"
+                >
+                  <ListMusic className="w-3.5 h-3.5" />
+                </button>
+
+                {/* Minimize Button */}
+                <button
+                  onClick={() => toggleWidgetMinimized(true)}
+                  className="p-1 text-zinc-400 hover:text-rose-500 rounded-full transition cursor-pointer shrink-0 ml-0.5"
+                  title="Thu nhỏ đĩa nhạc gọn gàng"
+                >
+                  <Minimize2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </motion.div>
 
       {/* Hidden/Active YouTube iframe player stream - persistent across pause/play */}
@@ -355,15 +441,28 @@ export const MusicPlayer: React.FC = () => {
                   </div>
                 </div>
 
-                <button
-                  onClick={() => {
-                    soundService.playPop();
-                    setIsPlayerOpen(false);
-                  }}
-                  className="p-2 rounded-full hover:bg-rose-100 dark:hover:bg-zinc-800 text-zinc-500 hover:text-rose-500 transition cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => {
+                      soundService.playPop();
+                      toggleWidgetMinimized();
+                    }}
+                    className="p-2 rounded-full hover:bg-rose-100 dark:hover:bg-zinc-800 text-zinc-500 hover:text-rose-500 transition cursor-pointer"
+                    title={isWidgetMinimized ? 'Chuyển thanh phát nổi sang dạng mở rộng' : 'Chuyển thanh phát nổi sang dạng đĩa mini thu nhỏ'}
+                  >
+                    {isWidgetMinimized ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
+                  </button>
+                  <button
+                    onClick={() => {
+                      soundService.playPop();
+                      setIsPlayerOpen(false);
+                    }}
+                    className="p-2 rounded-full hover:bg-rose-100 dark:hover:bg-zinc-800 text-zinc-500 hover:text-rose-500 transition cursor-pointer"
+                    title="Đóng cửa sổ âm nhạc"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
 
               {/* Toast Alerts */}

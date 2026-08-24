@@ -16,13 +16,50 @@ export interface CoupleProfile {
   musicCurrentTrackId?: string;
 }
 
+export type ThemeType =
+  | 'sakura'
+  | 'twilight'
+  | 'lavender'
+  | 'peach'
+  | 'matcha'
+  | 'mocha'
+  | 'high_contrast_light'
+  | 'high_contrast_oled'
+  | 'velvet_wine'
+  | 'ocean_sapphire'
+  | 'nordic_minimal'
+  | 'emerald_forest';
+
+export interface DailyCycleLog {
+  date: string; // YYYY-MM-DD
+  flow?: 'spotting' | 'light' | 'medium' | 'heavy' | 'none';
+  isPeriodDay: boolean;
+  painLevel?: number; // 0 - 5
+  symptoms: string[];
+  mood?: string;
+  cervicalMucus?: 'dry' | 'sticky' | 'creamy' | 'egg_white';
+  intimacy?: 'protected' | 'unprotected' | 'none';
+  temperature?: number;
+  waterGlasses?: number;
+  pillsTaken?: boolean;
+  notes?: string;
+  updatedAt: number;
+}
+
+export interface CycleSettings {
+  cycleLength: number; // default 28 days
+  periodDuration: number; // default 5 days
+  lastPeriodStartDate?: string; // YYYY-MM-DD
+  enabled: boolean;
+}
+
 export interface CoupleSettings {
   coupleStartDate: string; // YYYY-MM-DD
   anniversaryName: string;
   roomCode: string;
   passphrase: string; // For E2EE key derivation
   e2eeEnabled: boolean;
-  theme: 'sakura' | 'twilight' | 'lavender' | 'peach' | 'matcha' | 'mocha';
+  theme: ThemeType;
   isDarkMode: boolean;
   soundEnabled: boolean;
   floatingParticles: boolean;
@@ -30,6 +67,8 @@ export interface CoupleSettings {
   customQuote?: string;
   partnerBirthday?: string; // YYYY-MM-DD
   accountEmail?: string;
+  cycleSettings?: CycleSettings;
+  cycleLogs?: Record<string, DailyCycleLog>; // dateStr -> DailyCycleLog
 }
 
 export interface DiaryComment {

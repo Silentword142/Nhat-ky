@@ -260,6 +260,18 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [coupleContext?.roomPlaylist]);
 
+  const nextTrack = useCallback(() => {
+    if (playlist.length === 0) return;
+    soundService.playPop();
+    setCurrentTrackIndex((prev) => (prev + 1) % playlist.length);
+    setIsPlaying(true);
+  }, [playlist.length]);
+
+  const nextTrackRef = useRef(nextTrack);
+  useEffect(() => {
+    nextTrackRef.current = nextTrack;
+  }, [nextTrack]);
+
   useEffect(() => {
     const audio = new Audio();
     audio.preload = 'metadata';
@@ -288,17 +300,78 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     };
 
+    const handleAudioPlay = () => {
+      setIsPlaying(true);
+    };
+
+    const handleAudioPause = () => {
+      setIsPlaying(false);
+    };
+
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('ended', handleEnded);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('play', handleAudioPlay);
+    audio.addEventListener('playing', handleAudioPlay);
+    audio.addEventListener('pause', handleAudioPause);
 
     return () => {
       audio.pause();
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('ended', handleEnded);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.removeEventListener('play', handleAudioPlay);
+      audio.removeEventListener('playing', handleAudioPlay);
+      audio.removeEventListener('pause', handleAudioPause);
     };
   }, []);
+
+  // Listen for YouTube iframe playback state events to keep isPlaying 100% in sync
+  useEffect(() => {
+    const handleWindowMessage = (event: MessageEvent) => {
+      try {
+        let payload = event.data;
+        if (typeof payload === 'string') {
+          try {
+            payload = JSON.parse(payload);
+          } catch {}
+        }
+        if (payload && typeof payload === 'object') {
+          // YT Player State: 1 = PLAYING, 2 = PAUSED, 0 = ENDED, 3 = BUFFERING
+          if (payload.event === 'onStateChange' || payload.info !== undefined) {
+            const pState = typeof payload.info === 'number' ? payload.info : payload.info?.playerState;
+            if (pState === 1 || pState === 3) {
+              setIsPlaying(true);
+            } else if (pState === 2) {
+              setIsPlaying(false);
+            } else if (pState === 0) {
+              setIsPlaying(false);
+              nextTrack();
+            }
+          } else if (payload.event === 'infoDelivery' && payload.info) {
+            if (payload.info.playerState === 1 || payload.info.playerState === 3) {
+              setIsPlaying(true);
+            } else if (payload.info.playerState === 2) {
+              setIsPlaying(false);
+            }
+            if (typeof payload.info.currentTime === 'number') {
+              setProgress(payload.info.currentTime);
+            }
+            if (typeof payload.info.duration === 'number' && payload.info.duration > 0) {
+              setDuration(payload.info.duration);
+            }
+          }
+        }
+      } catch (e) {
+        // Ignore parsing errors
+      }
+    };
+
+    window.addEventListener('message', handleWindowMessage);
+    return () => {
+      window.removeEventListener('message', handleWindowMessage);
+    };
+  }, [nextTrack]);
 
   useEffect(() => {
     if (!currentTrack) return;
@@ -354,6 +427,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const playTrack = (track: MusicTrack) => {
     const idx = playlist.findIndex((t) => t.id === track.id);
     if (idx !== -1) {
+      if (currentTrack?.id === track.id) {
+        togglePlay();
+        return;
+      }
       setCurrentTrackIndex(idx);
       setIsPlaying(true);
 
@@ -407,13 +484,6 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
   };
-
-  const nextTrack = useCallback(() => {
-    if (playlist.length === 0) return;
-    soundService.playPop();
-    setCurrentTrackIndex((prev) => (prev + 1) % playlist.length);
-    setIsPlaying(true);
-  }, [playlist.length]);
 
   const prevTrack = () => {
     if (playlist.length === 0) return;

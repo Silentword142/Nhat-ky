@@ -874,6 +874,8 @@ export const SettingsView: React.FC = () => {
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
           {Object.values(THEMES).map((theme) => {
             const isSelected = settings.theme === theme.id;
+            const isHighContrast = theme.id.startsWith('high_contrast');
+
             return (
               <button
                 key={theme.id}
@@ -883,16 +885,23 @@ export const SettingsView: React.FC = () => {
                 }}
                 className={`p-3.5 rounded-2xl border text-left transition relative overflow-hidden flex flex-col justify-between cursor-pointer ${
                   isSelected
-                    ? 'border-rose-500 ring-2 ring-rose-400 bg-rose-50/60 dark:bg-rose-950/30'
-                    : 'border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/40 hover:bg-zinc-100'
+                    ? 'border-rose-500 ring-2 ring-rose-400 bg-rose-50/60 dark:bg-rose-950/30 shadow-md'
+                    : 'border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/40 hover:bg-zinc-100 dark:hover:bg-zinc-800'
                 }`}
               >
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xl">{theme.emoji}</span>
-                  <span
-                    className="w-5 h-5 rounded-full border-2 border-white shadow-sm"
-                    style={{ backgroundColor: theme.primaryColor }}
-                  />
+                  <div className="flex items-center gap-1">
+                    {isHighContrast && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 font-bold">
+                        Độ tương phản cao
+                      </span>
+                    )}
+                    <span
+                      className="w-5 h-5 rounded-full border-2 border-white shadow-xs"
+                      style={{ backgroundColor: theme.primaryColor }}
+                    />
+                  </div>
                 </div>
                 <div>
                   <h4 className="font-bold text-xs sm:text-sm text-zinc-800 dark:text-zinc-100 font-cute">
@@ -910,7 +919,7 @@ export const SettingsView: React.FC = () => {
         {/* Switches: Dark Mode, Sound Effects, Floating Particles */}
         <div className="space-y-3 pt-2 border-t border-zinc-200 dark:border-zinc-800">
           {/* Dark mode switch */}
-          <div className="flex items-center justify-between p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-800/40">
+          <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/40">
             <div className="flex items-center gap-2.5">
               {settings.isDarkMode ? (
                 <Moon className="w-5 h-5 text-indigo-400" />
@@ -918,11 +927,14 @@ export const SettingsView: React.FC = () => {
                 <Sun className="w-5 h-5 text-amber-500" />
               )}
               <div>
-                <div className="text-xs sm:text-sm font-bold text-zinc-800 dark:text-zinc-100">
-                  Chế độ tối (Dark Mode)
+                <div className="text-xs sm:text-sm font-bold text-zinc-800 dark:text-zinc-100 flex items-center gap-2">
+                  <span>Chế độ Tối (Dark Mode)</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-semibold">
+                    Độc lập hoàn toàn, không đồng bộ theo máy
+                  </span>
                 </div>
-                <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  Bảo vệ mắt khi viết nhật ký ban đêm cùng người yêu
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">
+                  Bật/tắt giao diện tối trực tiếp tại đây mà không bị ảnh hưởng bởi cài đặt sáng/tối của điện thoại
                 </div>
               </div>
             </div>

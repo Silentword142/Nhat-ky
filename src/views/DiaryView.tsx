@@ -20,13 +20,19 @@ import {
   AlertTriangle,
   User,
   FolderX,
+  Droplet,
+  Sparkles,
+  Activity,
+  Heart,
 } from 'lucide-react';
 import { useCouple } from '../context/CoupleContext';
-import { DiaryEntry } from '../types';
+import { DiaryEntry, DailyCycleLog, CycleSettings } from '../types';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { ImageLightbox, LightboxImageItem } from '../components/ImageLightbox';
 import { compressImageFile } from '../utils/image';
+import { CycleTrackerModal } from '../components/CycleTrackerModal';
+import { getDayCycleInfo } from '../utils/cycle';
 
 const MOODS = [
   { emoji: '🥰', label: 'Hạnh phúc' },
@@ -68,13 +74,45 @@ export const DiaryView: React.FC = () => {
     deleteDiary,
     deleteAllDayDiaries,
     addDiaryReaction,
+    updateSettings,
+    sendHeartbeat,
   } = useCouple();
 
   const currentTheme = THEMES[settings?.theme] || THEMES.sakura;
 
+  // Menstrual Cycle State & Modal
+  const [isCycleModalOpen, setIsCycleModalOpen] = useState(false);
+
+  const cycleSettings: CycleSettings = useMemo(
+    () => settings.cycleSettings || { cycleLength: 28, periodDuration: 5, enabled: true },
+    [settings.cycleSettings]
+  );
+  const cycleLogs: Record<string, DailyCycleLog> = useMemo(
+    () => settings.cycleLogs || {},
+    [settings.cycleLogs]
+  );
+
+  const handleSaveCycleLog = (date: string, log: DailyCycleLog) => {
+    const updated = { ...cycleLogs, [date]: log };
+    updateSettings({ cycleLogs: updated });
+  };
+
+  const handleSaveCycleSettings = (newSettings: CycleSettings) => {
+    updateSettings({ cycleSettings: newSettings });
+  };
+
+  const handleSendPartnerCareAction = (actionText: string) => {
+    sendHeartbeat('hug', actionText);
+  };
+
   // Selected calendar date (YYYY-MM-DD)
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
+
+  // Cycle Info for Selected Date
+  const selectedDayCycleInfo = useMemo(() => {
+    return getDayCycleInfo(selectedDate, cycleSettings, cycleLogs);
+  }, [selectedDate, cycleSettings, cycleLogs]);
 
   // Calendar month state
   const [currentCalDate, setCurrentCalDate] = useState<Date>(() => new Date());
@@ -207,6 +245,10 @@ export const DiaryView: React.FC = () => {
       diaryCount: number;
       isAnniversary: boolean;
       anniversaryName?: string;
+      isPeriod: boolean;
+      isOvulation: boolean;
+      isFertile: boolean;
+      cycleDay: number;
     }> = [];
 
     for (let i = 0; i < firstDayIndex; i++) {
@@ -219,6 +261,10 @@ export const DiaryView: React.FC = () => {
         hasDiary: false,
         diaryCount: 0,
         isAnniversary: false,
+        isPeriod: false,
+        isOvulation: false,
+        isFertile: false,
+        cycleDay: 0,
       });
     }
 
@@ -230,6 +276,9 @@ export const DiaryView: React.FC = () => {
       const diariesOnThisDay = Array.isArray(diaries) ? diaries.filter((d) => d && d.date === dateStr) : [];
       const isToday = dateStr === todayStr;
       const isSelected = dateStr === selectedDate;
+
+      // Flo cycle calculation for day
+      const dayCycle = getDayCycleInfo(dateStr, cycleSettings, cycleLogs);
 
       const matchingAnniv = Array.isArray(anniversaries)
         ? anniversaries.find((a) => {
@@ -254,11 +303,15 @@ export const DiaryView: React.FC = () => {
         diaryCount: diariesOnThisDay.length,
         isAnniversary: !!matchingAnniv,
         anniversaryName: matchingAnniv?.title,
+        isPeriod: dayCycle.isPeriod,
+        isOvulation: dayCycle.isOvulation,
+        isFertile: dayCycle.isFertile,
+        cycleDay: dayCycle.cycleDay,
       });
     }
 
     return days;
-  }, [currentCalDate, diaries, anniversaries, selectedDate, todayStr]);
+  }, [currentCalDate, diaries, anniversaries, selectedDate, todayStr, cycleSettings, cycleLogs]);
 
   // Page Turns WITHIN the Selected Day's Pages
   const handleTurnNextDayPage = () => {
@@ -680,138 +733,242 @@ export const DiaryView: React.FC = () => {
       {/* ========================================================================= */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* ========================================================================= */}
-        {/* 1. LOVE CALENDAR (4 COLS) - CLEAN WITHOUT INDIVIDUAL PAGE BUTTONS        */}
+        {/* 1. LOVE CALENDAR & FLO CYCLE TRACKER (4 COLS)                             */}
         {/* ========================================================================= */}
-        <div className="lg:col-span-4 bg-white dark:bg-zinc-900 rounded-3xl p-5 border border-rose-100 dark:border-zinc-800 shadow-lg space-y-4">
-          {/* Calendar Header */}
-          <div className="flex items-center justify-between pb-3 border-b border-rose-100 dark:border-zinc-800">
-            <div className="flex items-center gap-2">
-              <span className="p-2 rounded-2xl bg-rose-50 dark:bg-rose-950/40 text-rose-500">
-                <CalendarIcon className="w-4 h-4" />
-              </span>
-              <div>
-                <h3 className="font-bold text-sm text-zinc-800 dark:text-zinc-100 font-cute">
-                  Tháng {currentCalDate.getMonth() + 1}, {currentCalDate.getFullYear()}
-                </h3>
-                <span className="text-[11px] text-zinc-400">Chọn ngày để mở tập trang</span>
+        <div className="lg:col-span-4 space-y-4">
+          {/* FLO CYCLE QUICK GLANCE WIDGET */}
+          <div className="bg-gradient-to-br from-rose-500/10 via-pink-500/5 to-purple-500/10 dark:from-rose-950/40 dark:via-zinc-900 dark:to-purple-950/30 rounded-3xl p-4.5 border border-rose-200/80 dark:border-zinc-800 shadow-md space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-2xl bg-gradient-to-tr from-rose-500 to-pink-500 text-white flex items-center justify-center shadow-xs">
+                  <Droplet className="w-4 h-4 fill-current" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 font-cute flex items-center gap-1.5">
+                    <span>Chu Kỳ Flo</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-300 font-mono font-bold">
+                      {selectedDate === todayStr ? 'Hôm nay' : formatDisplayDate(selectedDate)}
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                    {selectedDayCycleInfo.phaseName}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => {
+                  soundService.playPop();
+                  setIsCycleModalOpen(true);
+                }}
+                className="px-3 py-1.5 rounded-2xl bg-white dark:bg-zinc-800 hover:bg-rose-50 dark:hover:bg-zinc-700 text-rose-600 dark:text-rose-300 border border-rose-200 dark:border-zinc-700 text-xs font-bold font-cute shadow-xs transition active:scale-95 cursor-pointer flex items-center gap-1"
+                title="Mở bảng theo dõi chi tiết chu kỳ & ghi triệu chứng"
+              >
+                <span>Chi tiết</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Flo Phase & Day Pills */}
+            <div className="flex items-center gap-2 flex-wrap text-xs">
+              <div className="px-3 py-1 rounded-xl bg-white/90 dark:bg-zinc-800 border border-rose-100 dark:border-zinc-700 font-cute font-bold text-zinc-800 dark:text-zinc-100 flex items-center gap-1.5 shadow-xs">
+                <span>{selectedDayCycleInfo.phaseEmoji}</span>
+                <span>Ngày {selectedDayCycleInfo.cycleDay}/{selectedDayCycleInfo.totalCycleDays}</span>
+              </div>
+
+              <div className={`px-2.5 py-1 rounded-xl border text-[11px] font-bold font-cute shadow-xs ${selectedDayCycleInfo.chanceColor}`}>
+                Thụ thai: {selectedDayCycleInfo.pregnancyChance}
               </div>
             </div>
 
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => {
-                  soundService.playPop();
-                  setCurrentCalDate((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
-                }}
-                className="p-1.5 rounded-full hover:bg-rose-50 dark:hover:bg-zinc-800 text-zinc-500 hover:text-rose-500 transition cursor-pointer"
-                title="Tháng trước"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => {
-                  soundService.playPop();
-                  setCurrentCalDate(new Date());
-                  setSelectedDate(todayStr);
-                }}
-                className="px-2 py-1 rounded-lg bg-rose-50 dark:bg-zinc-800 text-rose-600 dark:text-rose-300 text-[10px] font-bold cursor-pointer"
-              >
-                Nay
-              </button>
-              <button
-                onClick={() => {
-                  soundService.playPop();
-                  setCurrentCalDate((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
-                }}
-                className="p-1.5 rounded-full hover:bg-rose-50 dark:hover:bg-zinc-800 text-zinc-500 hover:text-rose-500 transition cursor-pointer"
-                title="Tháng sau"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
+            {/* Mini Partner Care Note */}
+            <p className="text-[11px] text-zinc-600 dark:text-zinc-300 italic bg-white/60 dark:bg-zinc-800/60 p-2.5 rounded-2xl border border-rose-100/60 dark:border-zinc-700/60 leading-relaxed font-cute flex items-start gap-1.5">
+              <Heart className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5 fill-rose-500" />
+              <span>{selectedDayCycleInfo.partnerCareTip}</span>
+            </p>
           </div>
 
-          {/* Weekday headers */}
-          <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-bold text-zinc-400">
-            <span>CN</span>
-            <span>T2</span>
-            <span>T3</span>
-            <span>T4</span>
-            <span>T5</span>
-            <span>T6</span>
-            <span>T7</span>
-          </div>
+          {/* CALENDAR CARD */}
+          <div className="bg-white dark:bg-zinc-900 rounded-3xl p-5 border border-rose-100 dark:border-zinc-800 shadow-lg space-y-4">
+            {/* Calendar Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-rose-100 dark:border-zinc-800">
+              <div className="flex items-center gap-2">
+                <span className="p-2 rounded-2xl bg-rose-50 dark:bg-rose-950/40 text-rose-500">
+                  <CalendarIcon className="w-4 h-4" />
+                </span>
+                <div>
+                  <h3 className="font-bold text-sm text-zinc-800 dark:text-zinc-100 font-cute">
+                    Tháng {currentCalDate.getMonth() + 1}, {currentCalDate.getFullYear()}
+                  </h3>
+                  <span className="text-[11px] text-zinc-400">Chọn ngày để mở tập trang</span>
+                </div>
+              </div>
 
-          {/* Days Grid */}
-          <div className="grid grid-cols-7 gap-1 text-center">
-            {calendarDays.map((item, idx) => {
-              if (!item.isCurrentMonth) {
-                return <div key={`empty_${idx}`} className="h-10 sm:h-11" />;
-              }
-
-              return (
+              <div className="flex items-center gap-1">
                 <button
-                  key={item.dateStr}
                   onClick={() => {
-                    if (item.dateStr) {
-                      soundService.playPaperOpen();
-                      setSelectedDate(item.dateStr);
-                    }
+                    soundService.playPop();
+                    setCurrentCalDate((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
                   }}
-                  className={`relative h-10 sm:h-11 rounded-full flex flex-col items-center justify-center transition-all duration-200 cursor-pointer ${
-                    item.isSelected
-                      ? 'bg-gradient-to-tr from-rose-500 to-pink-500 text-white font-bold shadow-md shadow-rose-200 scale-105 z-10'
-                      : item.isToday
-                      ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-300 font-bold border border-rose-300'
-                      : 'hover:bg-rose-50/70 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
-                  } ${!item.isSelected && item.hasDiary ? 'ring-2 ring-red-400 dark:ring-red-500 ring-offset-1 dark:ring-offset-zinc-900' : ''}`}
+                  className="p-1.5 rounded-full hover:bg-rose-50 dark:hover:bg-zinc-800 text-zinc-500 hover:text-rose-500 transition cursor-pointer"
+                  title="Tháng trước"
                 >
-                  <span className="text-xs leading-none">{item.dayNumber}</span>
-
-                  <div className="flex items-center gap-0.5 mt-1">
-                    {item.isAnniversary && (
-                      <span className="text-[10px] leading-none" title={item.anniversaryName || 'Kỷ niệm'}>
-                        💖
-                      </span>
-                    )}
-                    {item.hasDiary && (
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          item.isSelected ? 'bg-white ring-1 ring-rose-200' : 'bg-rose-500'
-                        }`}
-                        title={`${item.diaryCount} trang nhật ký`}
-                      />
-                    )}
-                  </div>
+                  <ChevronLeft className="w-4 h-4" />
                 </button>
-              );
-            })}
-          </div>
+                <button
+                  onClick={() => {
+                    soundService.playPop();
+                    setCurrentCalDate(new Date());
+                    setSelectedDate(todayStr);
+                  }}
+                  className="px-2 py-1 rounded-lg bg-rose-50 dark:bg-zinc-800 text-rose-600 dark:text-rose-300 text-[10px] font-bold cursor-pointer"
+                >
+                  Nay
+                </button>
+                <button
+                  onClick={() => {
+                    soundService.playPop();
+                    setCurrentCalDate((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+                  }}
+                  className="p-1.5 rounded-full hover:bg-rose-50 dark:hover:bg-zinc-800 text-zinc-500 hover:text-rose-500 transition cursor-pointer"
+                  title="Tháng sau"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
 
-          {/* Selected Date Summary & Quick Delete Option */}
-          <div className="pt-3 border-t border-rose-100 dark:border-zinc-800 flex items-center justify-between text-xs">
-            <div>
-              <span className="font-bold text-zinc-800 dark:text-zinc-200 block">
-                Tập ngày: {formatDisplayDate(selectedDate)}
+            {/* Weekday headers */}
+            <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-bold text-zinc-400">
+              <span>CN</span>
+              <span>T2</span>
+              <span>T3</span>
+              <span>T4</span>
+              <span>T5</span>
+              <span>T6</span>
+              <span>T7</span>
+            </div>
+
+            {/* Days Grid */}
+            <div className="grid grid-cols-7 gap-1 text-center">
+              {calendarDays.map((item, idx) => {
+                if (!item.isCurrentMonth) {
+                  return <div key={`empty_${idx}`} className="h-10 sm:h-11" />;
+                }
+
+                // Flo highlight styling
+                const isPeriodDay = item.isPeriod;
+                const isOvulationDay = item.isOvulation;
+                const isFertileDay = item.isFertile;
+
+                return (
+                  <button
+                    key={item.dateStr}
+                    onClick={() => {
+                      if (item.dateStr) {
+                        soundService.playPaperOpen();
+                        setSelectedDate(item.dateStr);
+                      }
+                    }}
+                    className={`relative h-10 sm:h-11 rounded-full flex flex-col items-center justify-center transition-all duration-200 cursor-pointer ${
+                      item.isSelected
+                        ? 'bg-gradient-to-tr from-rose-500 to-pink-500 text-white font-bold shadow-md shadow-rose-200 scale-105 z-10'
+                        : item.isToday
+                        ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-300 font-bold border border-rose-300'
+                        : isPeriodDay
+                        ? 'bg-rose-100/70 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 font-semibold'
+                        : isOvulationDay
+                        ? 'bg-purple-100/70 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 font-semibold'
+                        : 'hover:bg-rose-50/70 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                    } ${!item.isSelected && item.hasDiary ? 'ring-2 ring-rose-400 dark:ring-rose-500 ring-offset-1 dark:ring-offset-zinc-900' : ''}`}
+                  >
+                    <span className="text-xs leading-none">{item.dayNumber}</span>
+
+                    {/* Indicators Bar */}
+                    <div className="flex items-center gap-0.5 mt-0.5">
+                      {isPeriodDay && (
+                        <span className="text-[9px] leading-none" title="Kỳ kinh nguyệt">
+                          🩸
+                        </span>
+                      )}
+                      {isOvulationDay && (
+                        <span className="text-[9px] leading-none" title="Rụng trứng cao điểm">
+                          🌸
+                        </span>
+                      )}
+                      {isFertileDay && !isOvulationDay && !isPeriodDay && (
+                        <span className="text-[9px] leading-none" title="Cửa sổ thụ thai">
+                          ✨
+                        </span>
+                      )}
+                      {item.isAnniversary && (
+                        <span className="text-[9px] leading-none" title={item.anniversaryName || 'Kỷ niệm'}>
+                          💖
+                        </span>
+                      )}
+                      {item.hasDiary && (
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            item.isSelected ? 'bg-white ring-1 ring-rose-200' : 'bg-rose-500'
+                          }`}
+                          title={`${item.diaryCount} trang nhật ký`}
+                        />
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Calendar Flo Legend */}
+            <div className="pt-2 flex items-center justify-center gap-3 text-[10px] text-zinc-500 dark:text-zinc-400 border-t border-rose-100/70 dark:border-zinc-800 flex-wrap font-cute">
+              <span className="flex items-center gap-1">
+                <span>🩸</span>
+                <span>Kỳ kinh</span>
               </span>
-              <span className="text-rose-500 font-bold text-[11px]">
-                {selectedDayEntries.length} trang đã viết
+              <span className="flex items-center gap-1">
+                <span>🌸</span>
+                <span>Rụng trứng</span>
+              </span>
+              <span className="flex items-center gap-1">
+                <span>✨</span>
+                <span>Thụ thai</span>
+              </span>
+              <span className="flex items-center gap-1">
+                <span>💖</span>
+                <span>Kỷ niệm</span>
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 inline-block" />
+                <span>Nhật ký</span>
               </span>
             </div>
 
-            {selectedDayEntries.length > 0 && (
-              <button
-                onClick={() => {
-                  soundService.playPop();
-                  setIsDeleteEntireDayModalOpen(true);
-                }}
-                className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 dark:text-red-400 font-bold text-[11px] flex items-center gap-1 transition cursor-pointer"
-                title="Xóa toàn bộ các trang nhật ký của ngày này"
-              >
-                <Trash2 className="w-3 h-3 text-red-500" />
-                <span>Xóa tập ngày này</span>
-              </button>
-            )}
+            {/* Selected Date Summary & Quick Delete Option */}
+            <div className="pt-3 border-t border-rose-100 dark:border-zinc-800 flex items-center justify-between text-xs">
+              <div>
+                <span className="font-bold text-zinc-800 dark:text-zinc-200 block">
+                  Tập ngày: {formatDisplayDate(selectedDate)}
+                </span>
+                <span className="text-rose-500 font-bold text-[11px]">
+                  {selectedDayEntries.length} trang đã viết
+                </span>
+              </div>
+
+              {selectedDayEntries.length > 0 && (
+                <button
+                  onClick={() => {
+                    soundService.playPop();
+                    setIsDeleteEntireDayModalOpen(true);
+                  }}
+                  className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 dark:text-red-400 font-bold text-[11px] flex items-center gap-1 transition cursor-pointer"
+                  title="Xóa toàn bộ các trang nhật ký của ngày này"
+                >
+                  <Trash2 className="w-3 h-3 text-red-500" />
+                  <span>Xóa tập ngày này</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -1476,6 +1633,18 @@ export const DiaryView: React.FC = () => {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Flo Menstrual Cycle Modal */}
+      <CycleTrackerModal
+        isOpen={isCycleModalOpen}
+        onClose={() => setIsCycleModalOpen(false)}
+        selectedDate={selectedDate}
+        cycleSettings={cycleSettings}
+        cycleLogs={cycleLogs}
+        onSaveLog={handleSaveCycleLog}
+        onSaveSettings={handleSaveCycleSettings}
+        onSendPartnerCareAction={handleSendPartnerCareAction}
+      />
 
       {/* Universal Lightbox Zoom */}
       <ImageLightbox
