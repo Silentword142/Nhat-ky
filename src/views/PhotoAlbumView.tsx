@@ -31,6 +31,7 @@ import { soundService } from '../services/sound';
 import { ImageLightbox, LightboxImageItem } from '../components/ImageLightbox';
 import { uploadOriginalImageToDrive, uploadDataUrlImageToDrive } from '../services/googleDrive';
 import { getAccessToken, googleSignIn } from '../services/googleAuth';
+import { formatDateVN } from '../utils/date';
 
 interface BatchPreviewItem {
   id: string;
@@ -163,7 +164,7 @@ export const PhotoAlbumView: React.FC = () => {
       url: p.imageUrl,
       title: p.title,
       caption: p.caption,
-      date: p.date,
+      date: formatDateVN(p.date),
       location: p.location,
       authorName: p.authorName,
       originalQuality: true,
@@ -830,7 +831,7 @@ export const PhotoAlbumView: React.FC = () => {
 
                       <div className="flex items-center justify-between text-[11px] text-zinc-400 pt-1.5 border-t border-zinc-100 dark:border-zinc-800">
                         <span className="flex items-center gap-1">
-                          <Calendar className="w-3 h-3" /> {photo.date}
+                          <Calendar className="w-3 h-3" /> {formatDateVN(photo.date)}
                         </span>
 
                         <div className="flex items-center gap-2">

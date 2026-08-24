@@ -26,6 +26,7 @@ import {
   DayCycleInfo,
 } from '../utils/cycle';
 import { soundService } from '../services/sound';
+import { formatDateVN } from '../utils/date';
 
 interface CycleTrackerModalProps {
   isOpen: boolean;
@@ -183,7 +184,7 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
                 <h3 className="font-bold text-base sm:text-lg text-zinc-900 dark:text-zinc-100 font-cute flex items-center gap-2">
                   <span>Theo Dõi Chu Kỳ Flo</span>
                   <span className="px-2.5 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-300 text-xs font-mono font-bold">
-                    {selectedDate}
+                    {formatDateVN(selectedDate)}
                   </span>
                 </h3>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -295,7 +296,7 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
                     <div className="text-zinc-600 dark:text-zinc-300">
                       📅 Kỳ kinh tiếp theo:{' '}
                       <strong className="text-rose-600 dark:text-rose-400 font-mono">
-                        {dayInfo.nextPeriodStartDate}
+                        {formatDateVN(dayInfo.nextPeriodStartDate)}
                       </strong>
                     </div>
                     <div className="text-zinc-600 dark:text-zinc-300">
@@ -388,7 +389,7 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
                   className="w-full py-3 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white font-bold text-xs sm:text-sm shadow-lg shadow-rose-200 dark:shadow-none transition active:scale-98 cursor-pointer flex items-center justify-center gap-2"
                 >
                   <Droplet className="w-4 h-4 fill-current" />
-                  <span>Ghi Nhận Lượng Kinh & Triệu Chứng Ngày {selectedDate} 🩸</span>
+                  <span>Ghi Nhận Lượng Kinh & Triệu Chứng Ngày {formatDateVN(selectedDate)} 🩸</span>
                 </button>
               </div>
             )}
@@ -401,7 +402,7 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
                 {/* 1. Flow Level */}
                 <div className="space-y-2">
                   <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 font-cute">
-                    1. Mức độ ra kinh nguyệt hôm nay ({selectedDate}):
+                    1. Mức độ ra kinh nguyệt hôm nay ({formatDateVN(selectedDate)}):
                   </label>
                   <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
                     {FLOW_LEVELS.map((item) => {

@@ -6,6 +6,7 @@ import { soundService } from '../services/sound';
 import { compressImageFile, CUTE_AVATARS } from '../utils/image';
 import { DEFAULT_AVATAR_ME } from '../services/mockData';
 import { AvatarCropModal } from './AvatarCropModal';
+import { formatDateVN } from '../utils/date';
 
 const MOOD_EMOJIS = ['🥰', '💖', '🥺', '🥳', '🌸', '✨', '☕', '🍜', '😴', '👑', '🧸', '🍓'];
 
@@ -262,6 +263,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
                 onChange={(e) => setBirthday(e.target.value)}
                 className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700 focus:ring-2 focus:ring-rose-400"
               />
+              {birthday && (
+                <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono mt-1 block">
+                  Ngày sinh: <strong className="text-rose-500">{formatDateVN(birthday)}</strong>
+                </span>
+              )}
             </div>
           </div>
 

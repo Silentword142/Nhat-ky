@@ -182,6 +182,51 @@ export function smartMergeCollections<T extends { id?: string }>(
   return Array.from(map.values());
 }
 
+/**
+ * Authoritative Remote Merge:
+ * Always prioritizes incoming cloud/server data as the true source of truth.
+ * Only adds local items if they were freshly created/updated in this active session
+ * and strictly newer than the remote state. Stale device cache is never allowed to overwrite remote data.
+ */
+export function mergeWithAuthoritativeRemote<T extends { id?: string }>(
+  localList: T[] = [],
+  remoteList: T[] = [],
+  deletedIds: string[] = [],
+  hasLocalMutation: boolean = false,
+  remoteUpdatedAt: number = 0
+): T[] {
+  const deletedSet = new Set(deletedIds || []);
+  const map = new Map<string, T>();
+
+  // 1. Authoritative Remote items always take priority
+  for (const item of remoteList) {
+    if (item && item.id && !deletedSet.has(item.id)) {
+      map.set(item.id, item);
+    }
+  }
+
+  // 2. Only if the user performed a local mutation in this active session, preserve new/modified items
+  if (hasLocalMutation) {
+    for (const item of localList) {
+      if (!item || !item.id || deletedSet.has(item.id)) continue;
+      const existing = map.get(item.id);
+      const localTime = getItemTimestamp(item);
+      if (!existing) {
+        if (localTime >= remoteUpdatedAt) {
+          map.set(item.id, item);
+        }
+      } else {
+        const remoteTime = getItemTimestamp(existing);
+        if (localTime > remoteTime) {
+          map.set(item.id, { ...existing, ...item });
+        }
+      }
+    }
+  }
+
+  return Array.from(map.values());
+}
+
 // Unique Device Identity per browser
 const getOrCreateUserId = (): string => {
   try {
@@ -546,10 +591,16 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       const deletedIds = Array.isArray(data.deletedItemIds) ? data.deletedItemIds : [];
 
-      // 1. Sync Diaries with smart merge
+      // 1. Sync Diaries with authoritative remote merge
       if (Array.isArray(data.diaries)) {
         setDiaries((prev) => {
-          const merged = smartMergeCollections(prev, data.diaries, deletedIds);
+          const merged = mergeWithAuthoritativeRemote<DiaryEntry>(
+            prev,
+            data.diaries,
+            deletedIds,
+            hasUserMutatedRef.current,
+            data.updatedAt || 0
+          );
           merged.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
           try {
             localStorage.setItem(`${STORAGE_KEY_PREFIX}diaries`, JSON.stringify(merged));
@@ -558,10 +609,16 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         });
       }
 
-      // 2. Sync Photos with smart merge
+      // 2. Sync Photos with authoritative remote merge
       if (Array.isArray(data.photos)) {
         setPhotos((prev) => {
-          const merged = smartMergeCollections(prev, data.photos, deletedIds);
+          const merged = mergeWithAuthoritativeRemote<PhotoMemory>(
+            prev,
+            data.photos,
+            deletedIds,
+            hasUserMutatedRef.current,
+            data.updatedAt || 0
+          );
           merged.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
           try {
             localStorage.setItem(`${STORAGE_KEY_PREFIX}photos`, JSON.stringify(merged));
@@ -570,10 +627,16 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         });
       }
 
-      // 3. Sync Cards with smart merge
+      // 3. Sync Cards with authoritative remote merge
       if (Array.isArray(data.cards)) {
         setCards((prev) => {
-          const merged = smartMergeCollections(prev, data.cards, deletedIds);
+          const merged = mergeWithAuthoritativeRemote<HandwrittenCard>(
+            prev,
+            data.cards,
+            deletedIds,
+            hasUserMutatedRef.current,
+            data.updatedAt || 0
+          );
           merged.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
           try {
             localStorage.setItem(`${STORAGE_KEY_PREFIX}cards`, JSON.stringify(merged));
@@ -582,10 +645,16 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         });
       }
 
-      // 4. Sync Anniversaries with smart merge
+      // 4. Sync Anniversaries with authoritative remote merge
       if (Array.isArray(data.anniversaries)) {
         setAnniversaries((prev) => {
-          const merged = smartMergeCollections(prev, data.anniversaries, deletedIds);
+          const merged = mergeWithAuthoritativeRemote<AnniversaryEvent>(
+            prev,
+            data.anniversaries,
+            deletedIds,
+            hasUserMutatedRef.current,
+            data.updatedAt || 0
+          );
           try {
             localStorage.setItem(`${STORAGE_KEY_PREFIX}anniversaries`, JSON.stringify(merged));
           } catch {}
@@ -803,7 +872,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.warn('Could not fetch server state before Drive save:', err);
       }
 
-      // 2. Fetch existing Google Drive file if present to merge
+      // 2. Fetch existing Google Drive file if present to determine latest cloud version
       let driveExistingData: any = null;
       try {
         const dRes = await loadCoupleDataFromDrive(token, settings.roomCode);
@@ -814,42 +883,59 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.warn('Could not fetch existing Drive backup:', err);
       }
 
+      // Determine timestamps
+      const serverTime = serverRoom?.updatedAt || serverRoom?.timestamp || 0;
+      const driveTime = driveExistingData?.updatedAt || driveExistingData?.timestamp || (driveExistingData?.savedAt ? new Date(driveExistingData.savedAt).getTime() : 0);
+
+      // Select the newer dataset as base source of truth
+      const isDriveNewer = driveTime > serverTime && driveExistingData;
+      const baseData = isDriveNewer ? driveExistingData : (serverRoom || driveExistingData || {});
+      const baseTime = Math.max(serverTime, driveTime);
+
       const deletedIds = [
         ...(serverRoom?.deletedItemIds || []),
         ...(driveExistingData?.deletedItemIds || []),
       ];
 
-      // Smart merge all 3 sources (Server, Drive, Local) with timestamps
-      const mergedDiaries = smartMergeCollections<DiaryEntry>(
+      // Merge only fresh mutations created in THIS active session; otherwise take the newest remote data directly!
+      const mergedDiaries = mergeWithAuthoritativeRemote<DiaryEntry>(
         diaries,
-        smartMergeCollections<DiaryEntry>(driveExistingData?.diaries || [], serverRoom?.diaries || [], deletedIds),
-        deletedIds
+        baseData?.diaries || (isDriveNewer ? serverRoom?.diaries : driveExistingData?.diaries) || [],
+        deletedIds,
+        hasUserMutatedRef.current,
+        baseTime
       );
       mergedDiaries.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
 
-      const mergedPhotos = smartMergeCollections<PhotoMemory>(
+      const mergedPhotos = mergeWithAuthoritativeRemote<PhotoMemory>(
         photos,
-        smartMergeCollections<PhotoMemory>(driveExistingData?.photos || [], serverRoom?.photos || [], deletedIds),
-        deletedIds
+        baseData?.photos || (isDriveNewer ? serverRoom?.photos : driveExistingData?.photos) || [],
+        deletedIds,
+        hasUserMutatedRef.current,
+        baseTime
       );
       mergedPhotos.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
 
-      const mergedCards = smartMergeCollections<HandwrittenCard>(
+      const mergedCards = mergeWithAuthoritativeRemote<HandwrittenCard>(
         cards,
-        smartMergeCollections<HandwrittenCard>(driveExistingData?.cards || [], serverRoom?.cards || [], deletedIds),
-        deletedIds
+        baseData?.cards || (isDriveNewer ? serverRoom?.cards : driveExistingData?.cards) || [],
+        deletedIds,
+        hasUserMutatedRef.current,
+        baseTime
       );
       mergedCards.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
 
-      const mergedAnniversaries = smartMergeCollections<AnniversaryEvent>(
+      const mergedAnniversaries = mergeWithAuthoritativeRemote<AnniversaryEvent>(
         anniversaries,
-        smartMergeCollections<AnniversaryEvent>(driveExistingData?.anniversaries || [], serverRoom?.anniversaries || [], deletedIds),
-        deletedIds
+        baseData?.anniversaries || (isDriveNewer ? serverRoom?.anniversaries : driveExistingData?.anniversaries) || [],
+        deletedIds,
+        hasUserMutatedRef.current,
+        baseTime
       );
 
       let currentPlaylist = roomPlaylist;
-      if (!currentPlaylist || currentPlaylist.length === 0) {
-        currentPlaylist = serverRoom?.playlist || driveExistingData?.playlist || [];
+      if (!currentPlaylist || currentPlaylist.length === 0 || !hasUserMutatedRef.current) {
+        currentPlaylist = baseData?.playlist || serverRoom?.playlist || driveExistingData?.playlist || [];
       }
 
       let currentAlbums: any[] = [];
@@ -857,8 +943,8 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const aSaved = localStorage.getItem('lovesync_custom_albums_v2');
         if (aSaved) currentAlbums = JSON.parse(aSaved);
       } catch {}
-      if (!currentAlbums || currentAlbums.length === 0) {
-        currentAlbums = serverRoom?.albums || driveExistingData?.albums || [];
+      if (!currentAlbums || currentAlbums.length === 0 || !hasUserMutatedRef.current) {
+        currentAlbums = baseData?.albums || serverRoom?.albums || driveExistingData?.albums || [];
       }
 
       const mergedSettings = {
@@ -868,6 +954,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         roomCode: settings.roomCode,
       };
 
+      const nowTime = Date.now();
       const fullData = {
         myProfile,
         partnerProfile: partnerProfile || serverRoom?.profiles?.[Object.keys(serverRoom?.profiles || {}).find((id) => id !== myUserId) || ''] || driveExistingData?.partnerProfile || null,
@@ -880,12 +967,13 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         albums: currentAlbums,
         deletedItemIds: deletedIds,
         savedAt: new Date().toISOString(),
-        updatedAt: Date.now(),
+        updatedAt: nowTime,
       };
 
       // 3. Save strictly freshest dataset to Google Drive
       const result = await saveCoupleDataToDrive(token, settings.roomCode, fullData);
       if (result.success) {
+        hasUserMutatedRef.current = false;
         const timeStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         setGoogleDriveLastSavedAt(timeStr);
         if (result.folderUrl) {
@@ -894,7 +982,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
         localStorage.setItem(`${STORAGE_KEY_PREFIX}gdrive_last_saved`, timeStr);
 
-        // Update local React state and storage to reflect the merged newest data
+        // Update local React state and storage to reflect the freshest authoritative cloud data
         setDiaries(mergedDiaries);
         setPhotos(mergedPhotos);
         setCards(mergedCards);
@@ -906,17 +994,21 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           localStorage.setItem(`${STORAGE_KEY_PREFIX}anniversaries`, JSON.stringify(mergedAnniversaries));
         } catch {}
 
-        // Also sync the freshest merged data to the server
-        broadcastRoomChanges({
-          diaries: mergedDiaries,
-          photos: mergedPhotos,
-          cards: mergedCards,
-          anniversaries: mergedAnniversaries,
-          playlist: currentPlaylist,
-          albums: currentAlbums,
-          settings: mergedSettings,
-          deletedItemIds: deletedIds,
-        });
+        // Broadcast to server with replaceCollections: true so all devices are 100% in sync with Drive
+        try {
+          await fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/sync`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId: myUserId,
+              profile: myProfileRef.current,
+              state: {
+                ...fullData,
+                replaceCollections: true,
+              },
+            }),
+          });
+        } catch {}
 
         // Sync Google Drive metadata to user account on server for cross-device visibility
         saveGoogleDriveStatusService({
@@ -941,7 +1033,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } finally {
       setIsGoogleDriveSyncing(false);
     }
-  }, [settings.roomCode, myUserId, myProfile, partnerProfile, settings, diaries, photos, cards, anniversaries, roomPlaylist, authSessionUser, googleUser, googleDriveFolderUrl, broadcastRoomChanges]);
+  }, [settings.roomCode, myUserId, myProfile, partnerProfile, settings, diaries, photos, cards, anniversaries, roomPlaylist, authSessionUser, googleUser, googleDriveFolderUrl]);
 
   // Google Drive Manual Restore / Load
   const loadFromGoogleDriveNow = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
@@ -958,6 +1050,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       const result = await loadCoupleDataFromDrive(token, settings.roomCode);
       if (result.success && result.data) {
+        hasUserMutatedRef.current = false;
         const data = result.data;
         if (data.myProfile) setMyProfileState(data.myProfile);
         if (data.partnerProfile) setPartnerProfileState(data.partnerProfile);
@@ -986,15 +1079,23 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           localStorage.setItem('lovesync_custom_albums_v2', JSON.stringify(data.albums));
         }
 
-        broadcastRoomChanges({
-          diaries: data.diaries || [],
-          photos: data.photos || [],
-          cards: data.cards || [],
-          anniversaries: data.anniversaries || [],
-          playlist: data.playlist || [],
-          albums: data.albums || [],
-          settings: data.settings || {},
-        });
+        // Broadcast to server with replaceCollections: true
+        try {
+          await fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/sync`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId: myUserId,
+              profile: myProfileRef.current,
+              state: {
+                ...data,
+                replaceCollections: true,
+                roomCode: settings.roomCode,
+                updatedAt: Date.now(),
+              },
+            }),
+          });
+        } catch {}
 
         soundService.playSuccess();
         return { success: true };
@@ -1007,7 +1108,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } finally {
       setIsGoogleDriveSyncing(false);
     }
-  }, [settings.roomCode, broadcastRoomChanges]);
+  }, [settings.roomCode, myUserId]);
 
   // Connect Google Drive
   const connectGoogleDrive = useCallback(async (): Promise<boolean> => {

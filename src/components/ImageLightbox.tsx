@@ -14,6 +14,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { soundService } from '../services/sound';
+import { formatDateVN } from '../utils/date';
 
 export interface LightboxImageItem {
   url: string;
@@ -325,7 +326,7 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
                 </p>
               )}
               <div className="flex items-center justify-center gap-3 text-xs text-rose-300/80 font-sans">
-                {currentItem.date && <span>📅 {currentItem.date}</span>}
+                {currentItem.date && <span>📅 {formatDateVN(currentItem.date)}</span>}
                 {currentItem.location && <span>📍 {currentItem.location}</span>}
                 {currentItem.authorName && <span>✍️ Bởi {currentItem.authorName}</span>}
               </div>

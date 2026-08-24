@@ -21,6 +21,7 @@ import { useCouple } from '../context/CoupleContext';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { DEFAULT_AVATAR_PARTNER } from '../services/mockData';
+import { formatDateVN, getZodiacSign, ZodiacInfo } from '../utils/date';
 
 interface PartnerProfileModalProps {
   isOpen: boolean;
@@ -54,25 +55,10 @@ function getZodiacAndBirthdayInfo(birthdayStr?: string) {
   const daysUntil = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
   // Determine Zodiac Sign
-  const zodiacMap: Array<{ name: string; icon: string; traits: string; check: (d: number, m: number) => boolean }> = [
-    { name: 'Ma Kết (Capricorn)', icon: '♑', traits: 'Chân thành, kiên trì, ấm áp', check: (d, m) => (m === 12 && d >= 22) || (m === 1 && d <= 19) },
-    { name: 'Bảo Bình (Aquarius)', icon: '♒', traits: 'Sáng tạo, độc đáo, thấu hiểu', check: (d, m) => (m === 1 && d >= 20) || (m === 2 && d <= 18) },
-    { name: 'Song Ngư (Pisces)', icon: '♓', traits: 'Dịu dàng, lãng mạn, chu đáo', check: (d, m) => (m === 2 && d >= 19) || (m === 3 && d <= 20) },
-    { name: 'Bạch Dương (Aries)', icon: '♈', traits: 'Nhiệt tình, tràn đầy năng lượng', check: (d, m) => (m === 3 && d >= 21) || (m === 4 && d <= 19) },
-    { name: 'Kim Ngưu (Taurus)', icon: '♉', traits: 'Đáng tin cậy, ngọt ngào, bền bỉ', check: (d, m) => (m === 4 && d >= 20) || (m === 5 && d <= 20) },
-    { name: 'Song Tử (Gemini)', icon: '♊', traits: 'Thông minh, vui vẻ, duyên dáng', check: (d, m) => (m === 5 && d >= 21) || (m === 6 && d <= 21) },
-    { name: 'Cự Giải (Cancer)', icon: '♋', traits: 'Tình cảm, chu đáo, yêu thương', check: (d, m) => (m === 6 && d >= 22) || (m === 7 && d <= 22) },
-    { name: 'Sư Tử (Leo)', icon: '♌', traits: 'Tự tin, hào phóng, chung thủy', check: (d, m) => (m === 7 && d >= 23) || (m === 8 && d <= 22) },
-    { name: 'Xử Nữ (Virgo)', icon: '♍', traits: 'Tinh tế, cẩn thận, ngọt ngào', check: (d, m) => (m === 8 && d >= 23) || (m === 9 && d <= 22) },
-    { name: 'Thiên Bình (Libra)', icon: '♎', traits: 'Hài hòa, lịch thiệp, đáng yêu', check: (d, m) => (m === 9 && d >= 23) || (m === 10 && d <= 23) },
-    { name: 'Bọ Cạp (Scorpio)', icon: '♏', traits: 'Say đắm, quyến rũ, sâu sắc', check: (d, m) => (m === 10 && d >= 24) || (m === 11 && d <= 21) },
-    { name: 'Nhân Mã (Sagittarius)', icon: '♐', traits: 'Lạc quan, tự do, vui tươi', check: (d, m) => (m === 11 && d >= 22) || (m === 12 && d <= 21) },
-  ];
-
-  const zodiac = zodiacMap.find((z) => z.check(day, month)) || zodiacMap[0];
+  const zodiac = getZodiacSign(day, month);
 
   return {
-    formattedDate: `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${birthYear}`,
+    formattedDate: formatDateVN(birthdayStr),
     age,
     daysUntil: daysUntil === 0 ? 'Hôm nay là sinh nhật người ấy! 🎂🎉' : `Còn ${daysUntil} ngày nữa là đến sinh nhật`,
     isToday: daysUntil === 0,
@@ -131,139 +117,142 @@ export const PartnerProfileModal: React.FC<PartnerProfileModalProps> = ({ isOpen
           transition={{ type: 'spring', damping: 25, stiffness: 300 }}
           className="relative w-full max-w-lg rounded-3xl bg-white dark:bg-zinc-900 border border-rose-200/80 dark:border-zinc-800 shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col"
         >
-          {/* Header Banner */}
-          <div className="relative h-28 sm:h-32 bg-gradient-to-r from-rose-400 via-pink-400 to-rose-300 dark:from-rose-900 dark:via-pink-900 dark:to-zinc-800 flex items-start justify-between p-4">
-            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/20 backdrop-blur-md text-white text-xs font-bold font-cute">
-              <Sparkles className="w-3.5 h-3.5 text-amber-200 animate-pulse" />
-              <span>Hồ Sơ Người Thương 💑</span>
-            </div>
-
-            <button
-              onClick={onClose}
-              className="w-8 h-8 rounded-full bg-white/25 hover:bg-white/40 text-white flex items-center justify-center transition active:scale-95 cursor-pointer backdrop-blur-md"
-              title="Đóng"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          {/* Avatar and Main Info */}
-          <div className="relative px-6 pb-6 overflow-y-auto space-y-5">
-            {/* Avatar Profile Positioning */}
-            <div className="flex flex-col sm:flex-row items-center sm:items-end justify-between gap-3 -mt-14 sm:-mt-16">
-              <div className="relative group">
-                <div
-                  onClick={() => setShowAvatarZoom(true)}
-                  className="w-24 h-24 sm:w-28 sm:h-28 rounded-full ring-4 ring-white dark:ring-zinc-900 shadow-xl overflow-hidden cursor-pointer bg-rose-100 dark:bg-zinc-800 transition hover:scale-105"
-                  title="Bấm để xem ảnh phóng to"
-                >
-                  <img
-                    src={partner.avatar || DEFAULT_AVATAR_PARTNER}
-                    alt={partner.name || 'Người thương'}
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-                <span
-                  className="absolute -bottom-1 -right-1 text-2xl drop-shadow-md bg-white dark:bg-zinc-800 p-1 rounded-full border border-rose-100 dark:border-zinc-700"
-                  title="Cảm xúc hiện tại"
-                >
-                  {partner.mood || '💖'}
-                </span>
+          {/* Scrollable Container containing Header Banner & Main Body */}
+          <div className="overflow-y-auto flex-1 w-full">
+            {/* Header Banner */}
+            <div className="relative h-28 sm:h-32 bg-gradient-to-r from-rose-400 via-pink-400 to-rose-300 dark:from-rose-900 dark:via-pink-900 dark:to-zinc-800 flex items-start justify-between p-4">
+              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/20 backdrop-blur-md text-white text-xs font-bold font-cute">
+                <Sparkles className="w-3.5 h-3.5 text-amber-200 animate-pulse" />
+                <span>Hồ Sơ Người Thương 💑</span>
               </div>
 
-              {/* Online / Offline Status Badge */}
-              <div className="flex items-center gap-2">
-                <div
-                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold shadow-xs ${
-                    isPartnerOnline
-                      ? 'bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
-                      : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700'
-                  }`}
-                >
+              <button
+                onClick={onClose}
+                className="w-8 h-8 rounded-full bg-white/25 hover:bg-white/40 text-white flex items-center justify-center transition active:scale-95 cursor-pointer backdrop-blur-md"
+                title="Đóng"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Avatar and Main Info Body */}
+            <div className="relative px-6 pb-6 space-y-5">
+              {/* Avatar Profile Positioning */}
+              <div className="flex flex-col sm:flex-row items-center sm:items-end justify-between gap-3 -mt-14 sm:-mt-16 relative z-10">
+                <div className="relative group">
+                  <div
+                    onClick={() => setShowAvatarZoom(true)}
+                    className="w-24 h-24 sm:w-28 sm:h-28 rounded-full ring-4 ring-white dark:ring-zinc-900 shadow-xl overflow-hidden cursor-pointer bg-rose-100 dark:bg-zinc-800 transition hover:scale-105"
+                    title="Bấm để xem ảnh phóng to"
+                  >
+                    <img
+                      src={partner.avatar || DEFAULT_AVATAR_PARTNER}
+                      alt={partner.name || 'Người thương'}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
                   <span
-                    className={`w-2 h-2 rounded-full ${
-                      isPartnerOnline ? 'bg-emerald-500 animate-ping' : 'bg-zinc-400'
+                    className="absolute -bottom-1 -right-1 text-2xl drop-shadow-md bg-white dark:bg-zinc-800 p-1 rounded-full border border-rose-100 dark:border-zinc-700"
+                    title="Cảm xúc hiện tại"
+                  >
+                    {partner.mood || '💖'}
+                  </span>
+                </div>
+
+                {/* Online / Offline Status Badge */}
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold shadow-xs ${
+                      isPartnerOnline
+                        ? 'bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+                        : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700'
                     }`}
-                  />
-                  <span>{isPartnerOnline ? 'Đang Online Trực Tiếp 🟢' : 'Ngoại tuyến ⚪'}</span>
-                </div>
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        isPartnerOnline ? 'bg-emerald-500 animate-ping' : 'bg-zinc-400'
+                      }`}
+                    />
+                    <span>{isPartnerOnline ? 'Đang Online Trực Tiếp 🟢' : 'Ngoại tuyến ⚪'}</span>
+                  </div>
 
-                <div className="px-3.5 py-1.5 rounded-full bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-rose-600 dark:text-rose-300 text-xs font-bold">
-                  {daysInLove} ngày yêu 💕
+                  <div className="px-3.5 py-1.5 rounded-full bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-rose-600 dark:text-rose-300 text-xs font-bold">
+                    {daysInLove} ngày yêu 💕
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Names & Status */}
-            <div className="text-center sm:text-left space-y-1">
-              <div className="flex items-center justify-center sm:justify-start gap-2 flex-wrap">
-                <h3 className="text-xl sm:text-2xl font-serif italic font-bold text-zinc-900 dark:text-zinc-50">
-                  {partner.name || 'Người thương'}
-                </h3>
-                {partner.nickname && (
-                  <span className="px-2.5 py-0.5 rounded-full bg-rose-100 dark:bg-rose-900/60 text-rose-600 dark:text-rose-300 font-cute font-bold text-xs">
-                    Biệt danh: {partner.nickname}
-                  </span>
+              {/* Names & Status */}
+              <div className="text-center sm:text-left space-y-1">
+                <div className="flex items-center justify-center sm:justify-start gap-2 flex-wrap">
+                  <h3 className="text-xl sm:text-2xl font-serif italic font-bold text-zinc-900 dark:text-zinc-50">
+                    {partner.name || 'Người thương'}
+                  </h3>
+                  {partner.nickname && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-rose-100 dark:bg-rose-900/60 text-rose-600 dark:text-rose-300 font-cute font-bold text-xs">
+                      Biệt danh: {partner.nickname}
+                    </span>
+                  )}
+                </div>
+
+                {partnerAccountInfo?.username && (
+                  <p className="text-xs font-mono text-zinc-400 dark:text-zinc-500">
+                    Tài khoản: @{partnerAccountInfo.username}
+                  </p>
                 )}
-              </div>
 
-              {partnerAccountInfo?.username && (
-                <p className="text-xs font-mono text-zinc-400 dark:text-zinc-500">
-                  Tài khoản: @{partnerAccountInfo.username}
+                <p className="text-sm font-cute text-rose-600 dark:text-rose-400 font-semibold pt-1">
+                  "{partner.statusText || 'Trái tim luôn hướng về người ấy...'}"
                 </p>
+              </div>
+
+              {/* Birthday & Zodiac Card */}
+              {bdayInfo ? (
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-rose-50/80 via-pink-50/40 to-white dark:from-zinc-800/80 dark:to-zinc-900 border border-rose-200/70 dark:border-zinc-700 shadow-xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-bold text-xs font-cute">
+                      <Calendar className="w-4 h-4" />
+                      <span>Sinh Nhật & Cung Hoàng Đạo</span>
+                    </div>
+                    <span className="text-xs font-bold text-rose-500 font-cute bg-rose-100/80 dark:bg-rose-950/60 px-2.5 py-0.5 rounded-full">
+                      {bdayInfo.age > 0 ? `${bdayInfo.age} tuổi` : ''}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-zinc-800/80 border border-rose-100 dark:border-zinc-700">
+                      <span className="text-zinc-500 dark:text-zinc-400 text-[11px] block">Ngày sinh nhật:</span>
+                      <strong className="text-zinc-800 dark:text-zinc-100 font-mono text-sm">
+                        {bdayInfo.formattedDate}
+                      </strong>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-zinc-800/80 border border-rose-100 dark:border-zinc-700">
+                      <span className="text-zinc-500 dark:text-zinc-400 text-[11px] block">Cung hoàng đạo:</span>
+                      <strong className="text-zinc-800 dark:text-zinc-100 flex items-center gap-1.5 text-xs flex-wrap">
+                        <span className="text-sm">{bdayInfo.zodiac.icon}</span>
+                        <span>{bdayInfo.zodiac.vietnameseName}</span>
+                        <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-normal">({bdayInfo.zodiac.englishName})</span>
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="p-2.5 rounded-xl bg-rose-100/70 dark:bg-rose-950/40 border border-rose-200/60 dark:border-rose-800/50 flex items-center justify-between text-xs text-rose-700 dark:text-rose-300 font-cute flex-wrap gap-2">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <Gift className="w-4 h-4 text-rose-500 shrink-0" />
+                      <span>{bdayInfo.daysUntil}</span>
+                    </div>
+                    <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                      Đặc điểm: {bdayInfo.zodiac.traits}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700/60 text-xs text-zinc-500 dark:text-zinc-400 font-cute flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-rose-400" />
+                  <span>Người ấy chưa thiết lập ngày sinh nhật trong hồ sơ.</span>
+                </div>
               )}
-
-              <p className="text-sm font-cute text-rose-600 dark:text-rose-400 font-semibold pt-1">
-                "{partner.statusText || 'Trái tim luôn hướng về người ấy...'}"
-              </p>
-            </div>
-
-            {/* Birthday & Zodiac Card */}
-            {bdayInfo ? (
-              <div className="p-4 rounded-2xl bg-gradient-to-br from-rose-50/80 via-pink-50/40 to-white dark:from-zinc-800/80 dark:to-zinc-900 border border-rose-200/70 dark:border-zinc-700 shadow-xs space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-bold text-xs font-cute">
-                    <Calendar className="w-4 h-4" />
-                    <span>Sinh Nhật & Cung Hoàng Đạo</span>
-                  </div>
-                  <span className="text-xs font-bold text-rose-500 font-cute bg-rose-100/80 dark:bg-rose-950/60 px-2.5 py-0.5 rounded-full">
-                    {bdayInfo.age > 0 ? `${bdayInfo.age} tuổi` : ''}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div className="p-2.5 rounded-xl bg-white dark:bg-zinc-800/80 border border-rose-100 dark:border-zinc-700">
-                    <span className="text-zinc-500 dark:text-zinc-400 text-[11px] block">Ngày sinh nhật:</span>
-                    <strong className="text-zinc-800 dark:text-zinc-100 font-mono text-sm">
-                      {bdayInfo.formattedDate}
-                    </strong>
-                  </div>
-
-                  <div className="p-2.5 rounded-xl bg-white dark:bg-zinc-800/80 border border-rose-100 dark:border-zinc-700">
-                    <span className="text-zinc-500 dark:text-zinc-400 text-[11px] block">Cung hoàng đạo:</span>
-                    <strong className="text-zinc-800 dark:text-zinc-100 flex items-center gap-1 text-xs">
-                      <span>{bdayInfo.zodiac.icon}</span>
-                      <span>{bdayInfo.zodiac.name.split(' ')[0]}</span>
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="p-2.5 rounded-xl bg-rose-100/70 dark:bg-rose-950/40 border border-rose-200/60 dark:border-rose-800/50 flex items-center justify-between text-xs text-rose-700 dark:text-rose-300 font-cute">
-                  <div className="flex items-center gap-1.5 font-bold">
-                    <Gift className="w-4 h-4 text-rose-500 shrink-0" />
-                    <span>{bdayInfo.daysUntil}</span>
-                  </div>
-                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                    Đặc điểm: {bdayInfo.zodiac.traits}
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700/60 text-xs text-zinc-500 dark:text-zinc-400 font-cute flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-rose-400" />
-                <span>Người ấy chưa thiết lập ngày sinh nhật trong hồ sơ.</span>
-              </div>
-            )}
 
             {/* Bio & Love Quote */}
             <div className="space-y-3">
@@ -375,8 +364,9 @@ export const PartnerProfileModal: React.FC<PartnerProfileModalProps> = ({ isOpen
               </div>
             </div>
           </div>
+        </div>
 
-          {/* Full Avatar Zoom Overlay */}
+        {/* Full Avatar Zoom Overlay */}
           {showAvatarZoom && (
             <div
               onClick={() => setShowAvatarZoom(false)}

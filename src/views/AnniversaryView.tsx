@@ -23,6 +23,7 @@ import { AnniversaryEvent } from '../types';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { DEFAULT_AVATAR_ME, DEFAULT_AVATAR_PARTNER } from '../services/mockData';
+import { formatDateVN } from '../utils/date';
 
 const MILESTONES_TARGETS = [
   { targetDays: 100, label: '100 Ngày Yêu', emoji: '💯', title: 'Mốc 100 ngày ngọt ngào' },
@@ -178,11 +179,7 @@ export const AnniversaryView: React.FC = () => {
           <span>
             Kể từ ngày:{' '}
             <strong className="text-[#FF758F] font-bold">
-              {new Date(settings.coupleStartDate).toLocaleDateString('vi-VN', {
-                day: '2-digit',
-                month: '2-digit',
-                year: 'numeric',
-              })}
+              {formatDateVN(settings.coupleStartDate)}
             </strong>
           </span>
 
@@ -346,11 +343,7 @@ export const AnniversaryView: React.FC = () => {
                       {event.title}
                     </h4>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      {new Date(event.date).toLocaleDateString('vi-VN', {
-                        day: '2-digit',
-                        month: '2-digit',
-                        year: 'numeric',
-                      })}
+                      {formatDateVN(event.date)}
                       {event.repeatYearly && ' • Hàng năm'}
                     </p>
                     {event.notes && (

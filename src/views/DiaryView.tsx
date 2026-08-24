@@ -33,6 +33,7 @@ import { ImageLightbox, LightboxImageItem } from '../components/ImageLightbox';
 import { compressImageFile } from '../utils/image';
 import { CycleTrackerModal } from '../components/CycleTrackerModal';
 import { getDayCycleInfo } from '../utils/cycle';
+import { formatDateVN } from '../utils/date';
 
 const MOODS = [
   { emoji: '🥰', label: 'Hạnh phúc' },
@@ -159,10 +160,7 @@ export const DiaryView: React.FC = () => {
 
   // Format date display safely (DD/MM/YYYY)
   const formatDisplayDate = (dStr?: string) => {
-    if (!dStr || typeof dStr !== 'string') return '';
-    const parts = dStr.split('-');
-    if (parts.length < 3) return dStr;
-    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    return formatDateVN(dStr);
   };
 
   // Filter all diary entries belonging to the SELECTED DATE ONLY

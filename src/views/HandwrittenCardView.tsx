@@ -22,6 +22,7 @@ import { HandwrittenCard } from '../types';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { EnvelopeModal } from '../components/EnvelopeModal';
+import { formatDateVN } from '../utils/date';
 
 const PAPER_TEMPLATES = [
   { id: 'lined', name: 'Giấy Kẻ Ngang', className: 'paper-lined', previewColor: '#fffdfa' },
@@ -392,10 +393,7 @@ export const HandwrittenCardView: React.FC = () => {
                 {/* Card Footer */}
                 <div className="pt-3 border-t border-[#e8d9c5] dark:border-zinc-800 flex items-center justify-between text-[11px] text-zinc-400">
                   <span>
-                    {new Date(card.sentAt).toLocaleDateString('vi-VN', {
-                      day: '2-digit',
-                      month: '2-digit',
-                    })}
+                    {formatDateVN(card.sentAt)}
                   </span>
 
                   <span className="flex items-center gap-1 text-rose-500 font-bold group-hover:underline font-cute">

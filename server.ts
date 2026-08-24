@@ -1000,32 +1000,40 @@ app.post('/api/room/:roomCode/sync', (req, res) => {
 
     const deletedSet = new Set(currentRoom.deletedItemIds);
 
-    // Merge diaries safely without wiping partner's entries
-    if (state && Array.isArray(state.diaries)) {
-      currentRoom.diaries = mergeCollection(currentRoom.diaries || [], state.diaries, deletedSet);
-    } else if (currentRoom.diaries) {
-      currentRoom.diaries = currentRoom.diaries.filter((d: any) => !deletedSet.has(d.id));
-    }
+    // If replaceCollections is set (e.g. from Google Drive restore or fresh authoritative sync), replace directly
+    if (state?.replaceCollections) {
+      if (Array.isArray(state.diaries)) currentRoom.diaries = state.diaries.filter((d: any) => !deletedSet.has(d.id));
+      if (Array.isArray(state.photos)) currentRoom.photos = state.photos.filter((p: any) => !deletedSet.has(p.id));
+      if (Array.isArray(state.cards)) currentRoom.cards = state.cards.filter((c: any) => !deletedSet.has(c.id));
+      if (Array.isArray(state.anniversaries)) currentRoom.anniversaries = state.anniversaries.filter((a: any) => !deletedSet.has(a.id));
+    } else {
+      // Merge diaries safely without wiping partner's entries
+      if (state && Array.isArray(state.diaries)) {
+        currentRoom.diaries = mergeCollection(currentRoom.diaries || [], state.diaries, deletedSet);
+      } else if (currentRoom.diaries) {
+        currentRoom.diaries = currentRoom.diaries.filter((d: any) => !deletedSet.has(d.id));
+      }
 
-    // Merge photos safely
-    if (state && Array.isArray(state.photos)) {
-      currentRoom.photos = mergeCollection(currentRoom.photos || [], state.photos, deletedSet);
-    } else if (currentRoom.photos) {
-      currentRoom.photos = currentRoom.photos.filter((p: any) => !deletedSet.has(p.id));
-    }
+      // Merge photos safely
+      if (state && Array.isArray(state.photos)) {
+        currentRoom.photos = mergeCollection(currentRoom.photos || [], state.photos, deletedSet);
+      } else if (currentRoom.photos) {
+        currentRoom.photos = currentRoom.photos.filter((p: any) => !deletedSet.has(p.id));
+      }
 
-    // Merge cards safely
-    if (state && Array.isArray(state.cards)) {
-      currentRoom.cards = mergeCollection(currentRoom.cards || [], state.cards, deletedSet);
-    } else if (currentRoom.cards) {
-      currentRoom.cards = currentRoom.cards.filter((c: any) => !deletedSet.has(c.id));
-    }
+      // Merge cards safely
+      if (state && Array.isArray(state.cards)) {
+        currentRoom.cards = mergeCollection(currentRoom.cards || [], state.cards, deletedSet);
+      } else if (currentRoom.cards) {
+        currentRoom.cards = currentRoom.cards.filter((c: any) => !deletedSet.has(c.id));
+      }
 
-    // Merge anniversaries safely
-    if (state && Array.isArray(state.anniversaries)) {
-      currentRoom.anniversaries = mergeCollection(currentRoom.anniversaries || [], state.anniversaries, deletedSet);
-    } else if (currentRoom.anniversaries) {
-      currentRoom.anniversaries = currentRoom.anniversaries.filter((a: any) => !deletedSet.has(a.id));
+      // Merge anniversaries safely
+      if (state && Array.isArray(state.anniversaries)) {
+        currentRoom.anniversaries = mergeCollection(currentRoom.anniversaries || [], state.anniversaries, deletedSet);
+      } else if (currentRoom.anniversaries) {
+        currentRoom.anniversaries = currentRoom.anniversaries.filter((a: any) => !deletedSet.has(a.id));
+      }
     }
 
     // Update playlist safely
