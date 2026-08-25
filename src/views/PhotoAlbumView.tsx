@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Plus,
@@ -23,16 +23,23 @@ import {
   Cloud,
   CheckCircle2,
   AlertCircle,
+  FolderTree,
+  Eye,
 } from 'lucide-react';
 import { useCouple } from '../context/CoupleContext';
 import { PhotoMemory, Album } from '../types';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { ImageLightbox, LightboxImageItem } from '../components/ImageLightbox';
-import { uploadOriginalImageToDrive, uploadDataUrlImageToDrive } from '../services/googleDrive';
+import {
+  uploadOriginalImageToDrive,
+  uploadDataUrlImageToDrive,
+  scanGoogleDriveFoldersAndPhotos,
+} from '../services/googleDrive';
 import { getAccessToken, googleSignIn } from '../services/googleAuth';
 import { formatDateVN } from '../utils/date';
 import { DateInputVN } from '../components/DateInputVN';
+import { SmartDriveImage } from '../components/SmartDriveImage';
 
 interface BatchPreviewItem {
   id: string;
@@ -116,8 +123,18 @@ export const PhotoAlbumView: React.FC = () => {
     localStorage.setItem(STORAGE_ALBUMS_KEY, JSON.stringify(albumsList));
   }, [albumsList]);
 
+  // Google Drive folder discovery & scanning state
+  const [isScanningDrive, setIsScanningDrive] = useState(false);
+  const [driveScanFeedback, setDriveScanFeedback] = useState<string | null>(null);
+  const [activeSubfolder, setActiveSubfolder] = useState<string | null>(null);
+
   // Selected Album: null = Folder Overview list, 'all' = All photos, or album ID/name
   const [activeAlbumId, setActiveAlbumId] = useState<string | null>(null);
+
+  // Reset subfolder when active album changes
+  useEffect(() => {
+    setActiveSubfolder(null);
+  }, [activeAlbumId]);
 
   // Lightbox Zoom Viewer state
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -152,12 +169,116 @@ export const PhotoAlbumView: React.FC = () => {
     return albumsList.find((a) => a.id === activeAlbumId || a.name === activeAlbumId) || null;
   }, [activeAlbumId, albumsList]);
 
+  // Available subfolders for the current album
+  const currentAlbumSubfolders = useMemo(() => {
+    if (!currentAlbumObj) return [];
+    if (currentAlbumObj.subfolders && currentAlbumObj.subfolders.length > 0) {
+      return currentAlbumObj.subfolders;
+    }
+    // Also derive from photos with subfolderName
+    const albumName = currentAlbumObj.name;
+    const albumPhotos = photos.filter(
+      (p) => p.albumName === albumName || p.albumId === currentAlbumObj.id
+    );
+    const subNames = Array.from(
+      new Set(albumPhotos.map((p) => p.subfolderName).filter(Boolean) as string[])
+    );
+    return subNames.map((name) => ({
+      id: name,
+      name: name,
+      photoCount: albumPhotos.filter((p) => p.subfolderName === name).length,
+    }));
+  }, [currentAlbumObj, photos]);
+
   // Filtered photos for view
   const currentViewPhotos = useMemo(() => {
-    if (!activeAlbumId || activeAlbumId === 'all') return photos;
-    const albumName = currentAlbumObj?.name || activeAlbumId;
-    return photos.filter((p) => p.albumName === albumName || p.albumId === activeAlbumId || p.albumName === activeAlbumId);
-  }, [photos, activeAlbumId, currentAlbumObj]);
+    let result = photos;
+    if (activeAlbumId && activeAlbumId !== 'all') {
+      const albumName = currentAlbumObj?.name || activeAlbumId;
+      result = photos.filter(
+        (p) => p.albumName === albumName || p.albumId === activeAlbumId || p.albumName === activeAlbumId
+      );
+    }
+    if (activeSubfolder) {
+      result = result.filter((p) => p.subfolderName === activeSubfolder);
+    }
+    return result;
+  }, [photos, activeAlbumId, currentAlbumObj, activeSubfolder]);
+
+  // Scan Drive Folders handler
+  const handleScanDriveFolders = useCallback(async (showNotice = true) => {
+    try {
+      setIsScanningDrive(true);
+      let token = await getAccessToken();
+      if (!token) {
+        const res = await googleSignIn();
+        token = res?.accessToken || null;
+      }
+      if (!token) {
+        if (showNotice) {
+          alert('Vui lòng kết nối Google Drive để đồng bộ và quét các thư mục ảnh.');
+        }
+        return;
+      }
+
+      setDriveScanFeedback('Đang quét thư mục và thư mục con trên Google Drive (Photos/)...');
+      const scanResult = await scanGoogleDriveFoldersAndPhotos(token, myProfile.id, myProfile.name);
+
+      if (scanResult.folders && scanResult.folders.length > 0) {
+        setAlbumsList((prev) => {
+          const updated = [...prev];
+          for (const newAlb of scanResult.folders) {
+            const existingIdx = updated.findIndex(
+              (a) => a.id === newAlb.id || a.name.toLowerCase() === newAlb.name.toLowerCase()
+            );
+            if (existingIdx >= 0) {
+              updated[existingIdx] = {
+                ...updated[existingIdx],
+                ...newAlb,
+                subfolders: newAlb.subfolders || updated[existingIdx].subfolders,
+                driveFolderId: newAlb.driveFolderId || updated[existingIdx].driveFolderId,
+                driveFolderUrl: newAlb.driveFolderUrl || updated[existingIdx].driveFolderUrl,
+              };
+            } else {
+              updated.push(newAlb);
+            }
+          }
+          return updated;
+        });
+      }
+
+      if (scanResult.photos && scanResult.photos.length > 0) {
+        // Filter out photos that already exist in state by originalFileId or id
+        const existingIds = new Set(photos.map((p) => p.originalFileId || p.id));
+        const newDiscoveredPhotos = scanResult.photos.filter(
+          (p) => !existingIds.has(p.originalFileId) && !existingIds.has(p.id)
+        );
+
+        if (newDiscoveredPhotos.length > 0) {
+          addPhotosBatch(newDiscoveredPhotos);
+        }
+      }
+
+      soundService.playSparkle();
+      setDriveScanFeedback(
+        `✓ Đã đồng bộ ${scanResult.totalFoldersCount || 0} thư mục và ${scanResult.totalPhotosCount || 0} ảnh từ Google Drive!`
+      );
+      setTimeout(() => setDriveScanFeedback(null), 6000);
+    } catch (err) {
+      console.warn('Scan Google Drive error:', err);
+      setDriveScanFeedback('Không thể quét thư mục Google Drive lúc này.');
+      setTimeout(() => setDriveScanFeedback(null), 4000);
+    } finally {
+      setIsScanningDrive(false);
+    }
+  }, [myProfile.id, myProfile.name, photos, addPhotosBatch]);
+
+  // Auto scan once on mount if drive is connected
+  useEffect(() => {
+    if (isGoogleDriveConnected) {
+      handleScanDriveFolders(false);
+    }
+  }, [isGoogleDriveConnected]);
 
   // Prepare images for Lightbox
   const lightboxItems: LightboxImageItem[] = useMemo(() => {
@@ -169,6 +290,7 @@ export const PhotoAlbumView: React.FC = () => {
       location: p.location,
       authorName: p.authorName,
       originalQuality: true,
+      originalFileId: p.originalFileId,
       driveViewUrl: p.driveViewUrl,
       driveDownloadUrl: p.driveDownloadUrl,
       fileSize: p.fileSize,
@@ -531,12 +653,28 @@ export const PhotoAlbumView: React.FC = () => {
                 ? 'Mỗi album được lưu thành một thư mục con riêng trong Google Drive với độ phân giải và chất lượng gốc 100%.'
                 : 'Kết nối Google Drive để mọi ảnh chụp và video được lưu vĩnh viễn vào Google Drive với chất lượng gốc.'}
             </p>
+            {driveScanFeedback && (
+              <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1 animate-pulse">
+                <span>{driveScanFeedback}</span>
+              </p>
+            )}
           </div>
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
           {isGoogleDriveConnected ? (
             <>
+              {/* Scan & Open Drive Folders */}
+              <button
+                onClick={() => handleScanDriveFolders(true)}
+                disabled={isScanningDrive}
+                className="px-3.5 py-2 rounded-2xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+                title="Quét các thư mục và thư mục con từ Google Drive"
+              >
+                <FolderTree className={`w-3.5 h-3.5 ${isScanningDrive ? 'animate-spin' : ''}`} />
+                <span>{isScanningDrive ? 'Đang quét Drive...' : 'Quét Thư Mục Drive'}</span>
+              </button>
+
               {googleDriveFolderUrl && (
                 <a
                   href={googleDriveFolderUrl}
@@ -641,7 +779,7 @@ export const PhotoAlbumView: React.FC = () => {
                         style={{ backgroundColor: album.color || '#FF758F' }}
                       />
                       <span className="text-[11px] font-bold tracking-wider uppercase text-zinc-500 dark:text-zinc-400">
-                        Tệp Album
+                        {album.isDriveFolder ? 'Thư mục Drive 📁' : 'Tệp Album'}
                       </span>
                     </div>
 
@@ -675,20 +813,28 @@ export const PhotoAlbumView: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Album Cover Image Preview */}
+                  {/* Album Cover Image Preview with SmartDriveImage */}
                   <div className="relative aspect-4/3 overflow-hidden bg-zinc-100 dark:bg-zinc-800">
-                    <img
+                    <SmartDriveImage
                       src={coverImg}
+                      originalFileId={albumPhotos[0]?.originalFileId}
+                      driveViewUrl={albumPhotos[0]?.driveViewUrl}
                       alt={album.name}
+                      containerClassName="w-full h-full"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                     />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent pointer-events-none" />
 
                     {/* Count badge over image */}
-                    <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white">
+                    <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white pointer-events-none">
                       <span className="px-3 py-1 rounded-full bg-black/40 backdrop-blur-md text-xs font-bold border border-white/20">
                         📷 {albumPhotos.length} bức ảnh
                       </span>
+                      {album.subfolders && album.subfolders.length > 0 && (
+                        <span className="px-2.5 py-0.5 rounded-full bg-rose-500/80 backdrop-blur-md text-[11px] font-bold">
+                          {album.subfolders.length} thư mục con 📂
+                        </span>
+                      )}
                       <span className="text-xs font-bold text-rose-200 group-hover:translate-x-1 transition-transform">
                         Xem tệp →
                       </span>
@@ -730,6 +876,49 @@ export const PhotoAlbumView: React.FC = () => {
       {/* ========================================================================= */}
       {activeAlbumId && (
         <div className="space-y-6">
+          {/* Subfolder filter pills if current album has subfolders */}
+          {currentAlbumSubfolders.length > 0 && (
+            <div className="p-3.5 rounded-2xl bg-white dark:bg-zinc-900 border border-rose-100 dark:border-zinc-800 shadow-xs flex items-center gap-2 overflow-x-auto">
+              <span className="text-xs font-bold text-zinc-500 dark:text-zinc-400 shrink-0 flex items-center gap-1 ml-1">
+                <FolderTree className="w-3.5 h-3.5 text-rose-500" />
+                <span>Thư mục con:</span>
+              </span>
+              <button
+                onClick={() => {
+                  soundService.playPop();
+                  setActiveSubfolder(null);
+                }}
+                className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition cursor-pointer ${
+                  activeSubfolder === null
+                    ? 'bg-rose-500 text-white shadow-xs'
+                    : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200'
+                }`}
+              >
+                Tất cả thư mục
+              </button>
+              {currentAlbumSubfolders.map((sub) => (
+                <button
+                  key={sub.id || sub.name}
+                  onClick={() => {
+                    soundService.playPop();
+                    setActiveSubfolder(sub.name);
+                  }}
+                  className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition cursor-pointer flex items-center gap-1 ${
+                    activeSubfolder === sub.name
+                      ? 'bg-rose-500 text-white shadow-xs'
+                      : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200'
+                  }`}
+                >
+                  <Folder className="w-3 h-3 text-amber-400" />
+                  <span>{sub.name}</span>
+                  {sub.photoCount !== undefined && (
+                    <span className="text-[10px] opacity-80">({sub.photoCount})</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
           {currentViewPhotos.length === 0 ? (
             <div
               className={`text-center py-16 px-4 rounded-3xl ${currentTheme.cardBg} border ${currentTheme.borderSubtle}`}
@@ -738,7 +927,9 @@ export const PhotoAlbumView: React.FC = () => {
                 📸
               </div>
               <h3 className="text-lg font-bold text-zinc-800 dark:text-zinc-200 mb-1 font-cute">
-                Tệp album này chưa có bức ảnh nào
+                {activeSubfolder
+                  ? `Thư mục con "${activeSubfolder}" chưa có bức ảnh nào`
+                  : 'Tệp album này chưa có bức ảnh nào'}
               </h3>
               <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400 max-w-md mx-auto mb-5">
                 Hãy chọn và tải nhiều bức ảnh cùng lúc để lưu giữ những khoảnh khắc tuyệt vời vào album này nhé!
@@ -778,27 +969,31 @@ export const PhotoAlbumView: React.FC = () => {
                         : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 p-3'
                     }`}
                   >
-                    {/* Photo with click to open Lightbox with Zoom */}
+                    {/* Photo with SmartDriveImage & click to open Lightbox with Zoom */}
                     <div
                       onClick={() => openLightboxForPhoto(photo)}
                       className="relative aspect-square rounded-2xl overflow-hidden cursor-pointer group-hover:brightness-105 transition duration-300 bg-zinc-100 dark:bg-zinc-800"
                     >
-                      <img
+                      <SmartDriveImage
                         src={photo.imageUrl}
+                        originalFileId={photo.originalFileId}
+                        driveViewUrl={photo.driveViewUrl}
                         alt={photo.title}
+                        containerClassName="w-full h-full"
                         className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
+                        showDriveBadge={true}
                       />
 
                       {/* Decorative accents */}
                       {photo.frameStyle === 'sakura' && (
-                        <span className="absolute top-2 right-2 text-xl drop-shadow-md">🌸</span>
+                        <span className="absolute top-2 right-2 text-xl drop-shadow-md pointer-events-none">🌸</span>
                       )}
                       {photo.frameStyle === 'heart' && (
-                        <span className="absolute top-2 left-2 text-xl drop-shadow-md">💖</span>
+                        <span className="absolute top-2 left-2 text-xl drop-shadow-md pointer-events-none">💖</span>
                       )}
 
                       {/* Zoom indicator on hover */}
-                      <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-2">
+                      <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-2 pointer-events-none">
                         <span className="px-3 py-1.5 rounded-full bg-white/95 text-zinc-900 font-bold text-xs shadow-lg flex items-center gap-1.5">
                           <Maximize2 className="w-3.5 h-3.5 text-rose-500" />
                           <span>Phóng to & Zoom</span>
@@ -836,6 +1031,12 @@ export const PhotoAlbumView: React.FC = () => {
                         </span>
 
                         <div className="flex items-center gap-2">
+                          {photo.subfolderName && (
+                            <span className="flex items-center gap-0.5 text-amber-500 truncate max-w-[80px]" title={photo.subfolderName}>
+                              <Folder className="w-3 h-3 shrink-0" />
+                              <span className="truncate">{photo.subfolderName}</span>
+                            </span>
+                          )}
                           {photo.location && (
                             <span className="flex items-center gap-0.5 truncate max-w-[90px]">
                               <MapPin className="w-3 h-3" /> {photo.location}
@@ -843,7 +1044,7 @@ export const PhotoAlbumView: React.FC = () => {
                           )}
                           <button
                             onClick={() => deletePhoto(photo.id)}
-                            className="p-1 text-zinc-300 hover:text-red-500 transition"
+                            className="p-1 text-zinc-300 hover:text-red-500 transition cursor-pointer"
                             title="Xóa ảnh này"
                           >
                             <Trash2 className="w-3.5 h-3.5" />

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ZoomIn,
@@ -8,13 +8,13 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
-  Maximize2,
   RefreshCw,
-  Move,
   ExternalLink,
 } from 'lucide-react';
 import { soundService } from '../services/sound';
 import { formatDateVN } from '../utils/date';
+import { driveBlobCache, getAuthenticatedDriveImageUrl } from '../services/googleDrive';
+import { getAccessToken } from '../services/googleAuth';
 
 export interface LightboxImageItem {
   url: string;
@@ -24,6 +24,7 @@ export interface LightboxImageItem {
   location?: string;
   authorName?: string;
   originalQuality?: boolean;
+  originalFileId?: string;
   driveViewUrl?: string;
   driveDownloadUrl?: string;
   fileSize?: number;
@@ -166,12 +167,57 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
     setIsDragging(false);
   };
 
+  const currentItem = normalizedImages[currentIndex];
+  const [activeSrc, setActiveSrc] = useState<string>(currentItem?.url || '');
+
+  // Extract file ID
+  const resolvedFileId = React.useMemo(() => {
+    if (!currentItem) return undefined;
+    if (currentItem.originalFileId) return currentItem.originalFileId;
+    if (currentItem.url && currentItem.url.includes('drive.google.com')) {
+      const match = currentItem.url.match(/id=([a-zA-Z0-9_-]+)/);
+      if (match) return match[1];
+      const match2 = currentItem.url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if (match2) return match2[1];
+    }
+    if (currentItem.url && currentItem.url.includes('googleusercontent.com/d/')) {
+      const match = currentItem.url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if (match) return match[1];
+    }
+    return undefined;
+  }, [currentItem]);
+
+  // Sync active src when current item changes
+  useEffect(() => {
+    if (!currentItem) return;
+    if (resolvedFileId && driveBlobCache.has(resolvedFileId)) {
+      setActiveSrc(driveBlobCache.get(resolvedFileId)!);
+      return;
+    }
+    setActiveSrc(currentItem.url);
+  }, [currentItem, resolvedFileId]);
+
+  const handleImageError = async () => {
+    if (resolvedFileId) {
+      try {
+        const token = await getAccessToken();
+        if (token) {
+          const blobUrl = await getAuthenticatedDriveImageUrl(token, resolvedFileId);
+          if (blobUrl) {
+            setActiveSrc(blobUrl);
+          }
+        }
+      } catch (err) {
+        console.warn('ImageLightbox fallback resolution error:', err);
+      }
+    }
+  };
+
   const handleDownload = () => {
     soundService.playPop();
-    const currentItem = normalizedImages[currentIndex];
     if (!currentItem) return;
     const link = document.createElement('a');
-    link.href = currentItem.url;
+    link.href = activeSrc || currentItem.url;
     link.download = currentItem.title ? `${currentItem.title}.png` : `lovesync_memory_${Date.now()}.png`;
     document.body.appendChild(link);
     link.click();
@@ -179,8 +225,6 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
   };
 
   if (!isOpen || normalizedImages.length === 0) return null;
-
-  const currentItem = normalizedImages[currentIndex];
 
   return (
     <AnimatePresence>
@@ -305,9 +349,11 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
           style={{ cursor: scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default' }}
         >
           <motion.img
-            key={currentItem.url}
-            src={currentItem.url}
+            key={currentItem.url + (activeSrc || '')}
+            src={activeSrc || currentItem.url}
             alt={currentItem.title || 'LoveSync Memory'}
+            referrerPolicy="no-referrer"
+            onError={handleImageError}
             className="max-h-[85vh] max-w-[85vw] object-contain rounded-2xl shadow-2xl transition-transform duration-75 select-none"
             style={{
               transform: `translate(${position.x}px, ${position.y}px) scale(${scale}) rotate(${rotation}deg)`,

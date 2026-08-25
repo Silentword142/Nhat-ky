@@ -135,6 +135,12 @@ export interface Album {
   coverImage?: string;
   color?: string;
   createdAt: number;
+  driveFolderId?: string;
+  driveFolderUrl?: string;
+  parentFolderId?: string;
+  parentFolderName?: string;
+  subfolders?: Array<{ id: string; name: string; driveFolderId: string; photoCount?: number }>;
+  isDriveFolder?: boolean;
 }
 
 export interface PhotoMemory {
@@ -159,6 +165,7 @@ export interface PhotoMemory {
   likes: string[]; // userIds
   tags: string[];
   createdAt: number;
+  subfolderName?: string;
 }
 
 export interface HandwrittenCard {
