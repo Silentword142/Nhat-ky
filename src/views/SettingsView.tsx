@@ -41,6 +41,7 @@ import { DEFAULT_AVATAR_ME, DEFAULT_AVATAR_PARTNER } from '../services/mockData'
 import { getOAuthClientId, setCustomOAuthClientId, DEFAULT_PROD_CLIENT_ID } from '../services/googleAuth';
 import { AvatarCropModal } from '../components/AvatarCropModal';
 import { PartnerProfileModal } from '../components/PartnerProfileModal';
+import { DateInputVN } from '../components/DateInputVN';
 import { changePasswordWithoutOld, getCurrentAuthUser } from '../services/auth';
 
 export const SettingsView: React.FC = () => {
@@ -855,19 +856,17 @@ export const SettingsView: React.FC = () => {
 
         <form onSubmit={handleSaveAnniversary} className="flex flex-col sm:flex-row items-end gap-3">
           <div className="flex-1 w-full">
-            <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1.5 font-cute">
-              Ngày hai bạn chính thức yêu nhau (Dùng để đếm ngày yêu thời gian thực):
-            </label>
-            <input
-              type="date"
+            <DateInputVN
+              label="Ngày hai bạn chính thức yêu nhau (Dùng để đếm ngày yêu thời gian thực):"
               value={startDateInput}
-              onChange={(e) => setStartDateInput(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-rose-400 outline-hidden"
+              onChange={(val) => setStartDateInput(val)}
+              placeholder="dd/mm/yyyy"
+              inputClassName="!px-4 !py-2.5 !rounded-2xl !bg-zinc-50 dark:!bg-zinc-800 font-bold"
             />
           </div>
           <button
             type="submit"
-            className="w-full sm:w-auto px-6 py-2.5 rounded-2xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs shadow-md shadow-rose-200 dark:shadow-none transition active:scale-95 cursor-pointer whitespace-nowrap"
+            className="w-full sm:w-auto px-6 py-2.5 rounded-2xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs shadow-md shadow-rose-200 dark:shadow-none transition active:scale-95 cursor-pointer whitespace-nowrap mb-6"
           >
             Lưu Ngày Yêu 💖
           </button>
@@ -1120,14 +1119,13 @@ export const SettingsView: React.FC = () => {
               <span>Cập Nhật Ngày Sinh Nhật Của Bạn (Tự Động Tạo Sự Kiện Đếm Ngược)</span>
             </div>
             <div>
-              <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
-                Ngày sinh của bạn:
-              </label>
-              <input
-                type="date"
+              <DateInputVN
+                label="Ngày sinh của bạn:"
                 value={birthday}
-                onChange={(e) => setBirthday(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-rose-400"
+                onChange={(val) => setBirthday(val)}
+                placeholder="dd/mm/yyyy"
+                showZodiac={true}
+                inputClassName="!bg-white dark:!bg-zinc-900"
               />
             </div>
           </div>

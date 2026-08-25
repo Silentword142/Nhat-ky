@@ -32,6 +32,7 @@ import { ImageLightbox, LightboxImageItem } from '../components/ImageLightbox';
 import { uploadOriginalImageToDrive, uploadDataUrlImageToDrive } from '../services/googleDrive';
 import { getAccessToken, googleSignIn } from '../services/googleAuth';
 import { formatDateVN } from '../utils/date';
+import { DateInputVN } from '../components/DateInputVN';
 
 interface BatchPreviewItem {
   id: string;
@@ -978,19 +979,17 @@ export const PhotoAlbumView: React.FC = () => {
                 {/* Batch Common Info: Date, Location, Frame Style */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1">
-                      Ngày Kỷ Niệm
-                    </label>
-                    <input
-                      type="date"
+                    <DateInputVN
+                      label="Ngày Kỷ Niệm"
                       value={batchDefaultDate}
-                      onChange={(e) => setBatchDefaultDate(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-100"
+                      onChange={(val) => setBatchDefaultDate(val)}
+                      placeholder="dd/mm/yyyy"
+                      inputClassName="!bg-white dark:!bg-zinc-800"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1">
+                    <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1 font-cute">
                       Địa Điểm (Tùy chọn)
                     </label>
                     <input

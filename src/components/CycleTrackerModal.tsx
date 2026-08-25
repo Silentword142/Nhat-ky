@@ -27,6 +27,7 @@ import {
 } from '../utils/cycle';
 import { soundService } from '../services/sound';
 import { formatDateVN } from '../utils/date';
+import { DateInputVN } from './DateInputVN';
 
 interface CycleTrackerModalProps {
   isOpen: boolean;
@@ -587,15 +588,13 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1 font-cute">
-                    Ngày bắt đầu kỳ kinh nguyệt gần nhất:
-                  </label>
-                  <input
-                    type="date"
+                  <DateInputVN
+                    label="Ngày bắt đầu kỳ kinh nguyệt gần nhất:"
                     required
                     value={lastPeriodDateInput}
-                    onChange={(e) => setLastPeriodDateInput(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-800 dark:text-zinc-100"
+                    onChange={(val) => setLastPeriodDateInput(val)}
+                    placeholder="dd/mm/yyyy"
+                    inputClassName="!bg-zinc-50 dark:!bg-zinc-800 font-bold"
                   />
                 </div>
 

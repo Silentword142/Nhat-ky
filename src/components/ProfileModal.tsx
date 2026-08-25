@@ -7,6 +7,7 @@ import { compressImageFile, CUTE_AVATARS } from '../utils/image';
 import { DEFAULT_AVATAR_ME } from '../services/mockData';
 import { AvatarCropModal } from './AvatarCropModal';
 import { formatDateVN } from '../utils/date';
+import { DateInputVN } from './DateInputVN';
 
 const MOOD_EMOJIS = ['🥰', '💖', '🥺', '🥳', '🌸', '✨', '☕', '🍜', '😴', '👑', '🧸', '🍓'];
 
@@ -251,23 +252,18 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
           </div>
 
           {/* Birthday Settings (Auto updates anniversaries) */}
-          <div className="p-3 rounded-2xl bg-rose-50/60 dark:bg-zinc-800/50 border border-rose-100 dark:border-zinc-700 space-y-2.5">
+          <div className="p-3.5 rounded-2xl bg-rose-50/60 dark:bg-zinc-800/50 border border-rose-100 dark:border-zinc-700 space-y-2">
             <label className="block text-xs font-bold text-rose-600 dark:text-rose-400 font-cute flex items-center gap-1.5">
               <span>🎂</span>
               <span>Cập Nhật Ngày Sinh Của Bạn (Tự động vào sự kiện)</span>
             </label>
             <div>
-              <input
-                type="date"
+              <DateInputVN
                 value={birthday}
-                onChange={(e) => setBirthday(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700 focus:ring-2 focus:ring-rose-400"
+                onChange={(val) => setBirthday(val)}
+                placeholder="dd/mm/yyyy"
+                showZodiac={true}
               />
-              {birthday && (
-                <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono mt-1 block">
-                  Ngày sinh: <strong className="text-rose-500">{formatDateVN(birthday)}</strong>
-                </span>
-              )}
             </div>
           </div>
 

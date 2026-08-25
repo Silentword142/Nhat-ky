@@ -24,6 +24,7 @@ import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { DEFAULT_AVATAR_ME, DEFAULT_AVATAR_PARTNER } from '../services/mockData';
 import { formatDateVN } from '../utils/date';
+import { DateInputVN } from '../components/DateInputVN';
 
 const MILESTONES_TARGETS = [
   { targetDays: 100, label: '100 Ngày Yêu', emoji: '💯', title: 'Mốc 100 ngày ngọt ngào' },
@@ -193,16 +194,19 @@ export const AnniversaryView: React.FC = () => {
 
         {/* Start Date Edit Form */}
         {isEditingStartDate && (
-          <div className="mt-3 inline-flex items-center gap-2 p-2 rounded-2xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700">
-            <input
-              type="date"
-              value={tempStartDate}
-              onChange={(e) => setTempStartDate(e.target.value)}
-              className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-900 text-xs border border-zinc-300 dark:border-zinc-700 text-zinc-800 dark:text-zinc-100"
-            />
+          <div className="mt-3 flex flex-col sm:flex-row items-center gap-2 p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 max-w-md">
+            <div className="flex-1 w-full">
+              <DateInputVN
+                value={tempStartDate}
+                onChange={(val) => setTempStartDate(val)}
+                placeholder="dd/mm/yyyy"
+                showFormatHint={false}
+                inputClassName="!py-1.5 !px-3 !rounded-xl !bg-white dark:!bg-zinc-900 !text-xs font-bold"
+              />
+            </div>
             <button
               onClick={handleSaveStartDate}
-              className="px-3 py-1.5 rounded-xl bg-rose-500 text-white text-xs font-bold shadow-sm"
+              className="w-full sm:w-auto px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold shadow-sm transition active:scale-95 cursor-pointer whitespace-nowrap"
             >
               Lưu
             </button>
@@ -517,20 +521,18 @@ export const AnniversaryView: React.FC = () => {
                 {/* Date & Category */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1">
-                      Ngày diễn ra *
-                    </label>
-                    <input
-                      type="date"
+                    <DateInputVN
+                      label="Ngày diễn ra"
                       required
                       value={date}
-                      onChange={(e) => setDate(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-100 border-0"
+                      onChange={(val) => setDate(val)}
+                      placeholder="dd/mm/yyyy"
+                      inputClassName="!bg-zinc-100 dark:!bg-zinc-800 !border-0"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1">
+                    <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1 font-cute">
                       Phân loại
                     </label>
                     <select

@@ -22,6 +22,7 @@ import {
 import { useCouple } from '../context/CoupleContext';
 import { soundService } from '../services/sound';
 import { DEFAULT_AVATAR_ME } from '../services/mockData';
+import { DateInputVN } from './DateInputVN';
 import {
   registerAccount,
   loginAccount,
@@ -771,14 +772,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
 
                 {/* User Birthday field */}
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-600 dark:text-zinc-300 mb-1">
-                    🎂 Ngày sinh của bạn (Tùy chọn)
-                  </label>
-                  <input
-                    type="date"
+                  <DateInputVN
+                    label="🎂 Ngày sinh của bạn (Tùy chọn)"
                     value={birthday}
-                    onChange={(e) => setBirthday(e.target.value)}
-                    className="w-full px-3 py-2 rounded-2xl bg-zinc-50 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 text-xs font-medium text-zinc-800 dark:text-zinc-100 focus:outline-none"
+                    onChange={(val) => setBirthday(val)}
+                    placeholder="dd/mm/yyyy"
+                    showZodiac={true}
+                    inputClassName="!rounded-2xl !bg-zinc-50 dark:!bg-zinc-800/80"
                   />
                 </div>
 

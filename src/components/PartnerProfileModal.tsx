@@ -21,24 +21,22 @@ import { useCouple } from '../context/CoupleContext';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { DEFAULT_AVATAR_PARTNER } from '../services/mockData';
-import { formatDateVN, getZodiacSign, ZodiacInfo } from '../utils/date';
+import { formatDateVN, getZodiacSign, parseDateParts, ZodiacInfo } from '../utils/date';
 
 interface PartnerProfileModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-// Helper to calculate Zodiac sign & countdown to next birthday
+// Helper to calculate Zodiac sign & countdown to next birthday accurately
 function getZodiacAndBirthdayInfo(birthdayStr?: string) {
   if (!birthdayStr) return null;
-  const bdate = new Date(birthdayStr);
-  if (isNaN(bdate.getTime())) return null;
+  const parts = parseDateParts(birthdayStr);
+  if (!parts) return null;
 
-  const day = bdate.getDate();
-  const month = bdate.getMonth() + 1; // 1-12
-  const birthYear = bdate.getFullYear();
+  const { day, month, year: birthYear } = parts;
 
-  // Calculate age
+  // Calculate age accurately
   const today = new Date();
   let age = today.getFullYear() - birthYear;
   const monthDiff = today.getMonth() + 1 - month;
@@ -47,12 +45,13 @@ function getZodiacAndBirthdayInfo(birthdayStr?: string) {
   }
 
   // Calculate next birthday countdown
+  const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   let nextBday = new Date(today.getFullYear(), month - 1, day);
-  if (nextBday.getTime() < today.getTime()) {
+  if (nextBday.getTime() < todayMidnight.getTime()) {
     nextBday = new Date(today.getFullYear() + 1, month - 1, day);
   }
-  const diffTime = nextBday.getTime() - today.getTime();
-  const daysUntil = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  const diffTime = nextBday.getTime() - todayMidnight.getTime();
+  const daysUntil = Math.round(diffTime / (1000 * 60 * 60 * 24));
 
   // Determine Zodiac Sign
   const zodiac = getZodiacSign(day, month);
