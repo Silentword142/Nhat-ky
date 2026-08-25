@@ -1,4 +1,4 @@
-import { DailyCycleLog, CycleSettings } from '../types';
+import { DailyCycleLog, CycleSettings, PeriodRecord } from '../types';
 
 export interface CycleSymptom {
   id: string;
@@ -70,29 +70,140 @@ export interface DayCycleInfo {
   partnerCareAction: string;
 }
 
+export interface PredictedCycle {
+  cycleIndex: number;
+  startDate: string;
+  endDate: string;
+  ovulationDate: string;
+  fertileStartDate: string;
+  fertileEndDate: string;
+  cycleLength: number;
+  periodDuration: number;
+}
+
 // Date helpers
-const parseDate = (dStr: string) => {
+export const parseDate = (dStr: string) => {
+  if (!dStr) return new Date();
   const [y, m, d] = dStr.split('-').map(Number);
   return new Date(y, m - 1, d);
 };
 
-const formatDate = (date: Date) => {
+export const formatDate = (date: Date) => {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 };
 
-const diffDays = (d1: Date, d2: Date) => {
+export const diffDays = (d1: Date, d2: Date) => {
   const t1 = Date.UTC(d1.getFullYear(), d1.getMonth(), d1.getDate());
   const t2 = Date.UTC(d2.getFullYear(), d2.getMonth(), d2.getDate());
   return Math.round((t1 - t2) / (1000 * 60 * 60 * 24));
 };
 
-const addDays = (d: Date, days: number) => {
+export const addDays = (d: Date, days: number) => {
   const res = new Date(d);
   res.setDate(res.getDate() + days);
   return res;
+};
+
+/**
+ * Get all consolidated period records (combining settings history, lastPeriodStartDate, and logs)
+ * Sorted chronologically from oldest to newest.
+ */
+export const getConsolidatedPeriodHistory = (
+  cycleSettings: CycleSettings = { cycleLength: 28, periodDuration: 5, enabled: true },
+  cycleLogs: Record<string, DailyCycleLog> = {}
+): PeriodRecord[] => {
+  const historyMap = new Map<string, PeriodRecord>();
+
+  // 1. Existing explicit history records
+  if (Array.isArray(cycleSettings.history)) {
+    for (const item of cycleSettings.history) {
+      if (item && item.startDate) {
+        historyMap.set(item.startDate, {
+          ...item,
+          duration: item.duration || cycleSettings.periodDuration || 5,
+        });
+      }
+    }
+  }
+
+  // 2. Current lastPeriodStartDate
+  if (cycleSettings.lastPeriodStartDate) {
+    if (!historyMap.has(cycleSettings.lastPeriodStartDate)) {
+      historyMap.set(cycleSettings.lastPeriodStartDate, {
+        id: `period_${cycleSettings.lastPeriodStartDate}`,
+        startDate: cycleSettings.lastPeriodStartDate,
+        duration: cycleSettings.periodDuration || 5,
+        cycleLength: cycleSettings.cycleLength || 28,
+        loggedAt: Date.now(),
+      });
+    }
+  }
+
+  // 3. Scan daily cycle logs for distinct period start dates
+  const sortedLogDates = Object.keys(cycleLogs).sort();
+  for (let i = 0; i < sortedLogDates.length; i++) {
+    const dStr = sortedLogDates[i];
+    const log = cycleLogs[dStr];
+    if (log && log.isPeriodDay && log.flow !== 'none') {
+      const prevDate = addDays(parseDate(dStr), -1);
+      const prevStr = formatDate(prevDate);
+      const prevLog = cycleLogs[prevStr];
+      if (!prevLog || !prevLog.isPeriodDay || prevLog.flow === 'none') {
+        if (!historyMap.has(dStr)) {
+          // Count duration in logs
+          let dur = 1;
+          let checkDate = addDays(parseDate(dStr), 1);
+          while (cycleLogs[formatDate(checkDate)]?.isPeriodDay && cycleLogs[formatDate(checkDate)]?.flow !== 'none') {
+            dur++;
+            checkDate = addDays(checkDate, 1);
+          }
+          historyMap.set(dStr, {
+            id: `period_${dStr}`,
+            startDate: dStr,
+            duration: dur > 0 ? dur : (cycleSettings.periodDuration || 5),
+            loggedAt: log.updatedAt || Date.now(),
+          });
+        }
+      }
+    }
+  }
+
+  // If completely empty, default to 10 days ago
+  if (historyMap.size === 0) {
+    const defaultStart = formatDate(addDays(new Date(), -10));
+    historyMap.set(defaultStart, {
+      id: `period_${defaultStart}`,
+      startDate: defaultStart,
+      duration: cycleSettings.periodDuration || 5,
+      cycleLength: cycleSettings.cycleLength || 28,
+      loggedAt: Date.now(),
+    });
+  }
+
+  const sortedList = Array.from(historyMap.values()).sort((a, b) => a.startDate.localeCompare(b.startDate));
+
+  // Compute cycleLength intervals between consecutive periods
+  for (let i = 0; i < sortedList.length - 1; i++) {
+    const d1 = parseDate(sortedList[i].startDate);
+    const d2 = parseDate(sortedList[i + 1].startDate);
+    const interval = diffDays(d2, d1);
+    if (interval > 0) {
+      sortedList[i].cycleLength = interval;
+    }
+  }
+
+  // For the latest period, use the configured cycleLength
+  if (sortedList.length > 0) {
+    const last = sortedList[sortedList.length - 1];
+    if (!last.cycleLength) {
+      last.cycleLength = cycleSettings.cycleLength || 28;
+    }
+  }
+
+  return sortedList;
 };
 
 /**
@@ -102,65 +213,233 @@ export const getPeriodStartDates = (
   cycleSettings: CycleSettings = { cycleLength: 28, periodDuration: 5, enabled: true },
   cycleLogs: Record<string, DailyCycleLog> = {}
 ): string[] => {
-  const loggedStarts = new Set<string>();
-
-  if (cycleSettings.lastPeriodStartDate) {
-    loggedStarts.add(cycleSettings.lastPeriodStartDate);
-  }
-
-  // Find logged period days where previous day was not a period day
-  const sortedLoggedDates = Object.keys(cycleLogs).sort();
-  for (let i = 0; i < sortedLoggedDates.length; i++) {
-    const dStr = sortedLoggedDates[i];
-    const log = cycleLogs[dStr];
-    if (log && log.isPeriodDay && log.flow !== 'none') {
-      const prevDate = addDays(parseDate(dStr), -1);
-      const prevStr = formatDate(prevDate);
-      const prevLog = cycleLogs[prevStr];
-      if (!prevLog || !prevLog.isPeriodDay || prevLog.flow === 'none') {
-        loggedStarts.add(dStr);
-      }
-    }
-  }
-
-  // If no date set, default to 10 days ago so new users see an interactive populated preview
-  if (loggedStarts.size === 0) {
-    const defaultStart = formatDate(addDays(new Date(), -10));
-    loggedStarts.add(defaultStart);
-  }
-
-  return Array.from(loggedStarts).sort();
+  const history = getConsolidatedPeriodHistory(cycleSettings, cycleLogs);
+  return history.map((h) => h.startDate);
 };
 
 /**
- * Get the most relevant cycle start anchor date for calculations
+ * Proactively log the start of a new period without distorting or losing previous periods.
+ * Returns the updated CycleSettings and DailyCycleLog map.
+ */
+export const logNewPeriodStart = (
+  newStartDate: string,
+  duration: number = 5,
+  notes: string = '',
+  currentSettings: CycleSettings,
+  currentLogs: Record<string, DailyCycleLog> = {}
+): { updatedSettings: CycleSettings; updatedLogs: Record<string, DailyCycleLog> } => {
+  const existingHistory = getConsolidatedPeriodHistory(currentSettings, currentLogs);
+
+  const cleanDuration = Math.max(1, Math.min(15, Number(duration) || currentSettings.periodDuration || 5));
+  const newDateObj = parseDate(newStartDate);
+
+  // New record
+  const newRecord: PeriodRecord = {
+    id: `period_${newStartDate}_${Date.now()}`,
+    startDate: newStartDate,
+    duration: cleanDuration,
+    cycleLength: currentSettings.cycleLength || 28,
+    notes: notes.trim() || undefined,
+    loggedAt: Date.now(),
+  };
+
+  // Merge into history list without duplicates on the same start date
+  const updatedHistoryMap = new Map<string, PeriodRecord>();
+  for (const item of existingHistory) {
+    if (item.startDate !== newStartDate) {
+      updatedHistoryMap.set(item.startDate, item);
+    }
+  }
+  updatedHistoryMap.set(newStartDate, newRecord);
+
+  const sortedHistory = Array.from(updatedHistoryMap.values()).sort((a, b) => a.startDate.localeCompare(b.startDate));
+
+  // Re-calculate cycle intervals
+  for (let i = 0; i < sortedHistory.length - 1; i++) {
+    const d1 = parseDate(sortedHistory[i].startDate);
+    const d2 = parseDate(sortedHistory[i + 1].startDate);
+    const interval = diffDays(d2, d1);
+    if (interval > 0) {
+      sortedHistory[i].cycleLength = interval;
+    }
+  }
+
+  // Determine latest period start date
+  const latestRecord = sortedHistory[sortedHistory.length - 1];
+
+  const updatedSettings: CycleSettings = {
+    ...currentSettings,
+    periodDuration: cleanDuration,
+    lastPeriodStartDate: latestRecord.startDate,
+    enabled: true,
+    history: sortedHistory,
+  };
+
+  // Populate daily period logs for the bleeding duration of the new period
+  const updatedLogs = { ...currentLogs };
+  for (let d = 0; d < cleanDuration; d++) {
+    const dateOfPeriod = formatDate(addDays(newDateObj, d));
+    const prevEntry = updatedLogs[dateOfPeriod];
+    updatedLogs[dateOfPeriod] = {
+      date: dateOfPeriod,
+      flow: d === 0 ? 'heavy' : d < 3 ? 'medium' : 'light',
+      isPeriodDay: true,
+      painLevel: prevEntry?.painLevel ?? (d === 0 ? 2 : 1),
+      symptoms: prevEntry?.symptoms || (d === 0 ? ['cramps'] : []),
+      mood: prevEntry?.mood || '',
+      cervicalMucus: prevEntry?.cervicalMucus || 'dry',
+      notes: d === 0 && notes ? notes : prevEntry?.notes,
+      updatedAt: Date.now(),
+    };
+  }
+
+  return { updatedSettings, updatedLogs };
+};
+
+/**
+ * Remove a specific period record from history
+ */
+export const removePeriodFromHistory = (
+  startDateToRemove: string,
+  currentSettings: CycleSettings,
+  currentLogs: Record<string, DailyCycleLog> = {}
+): { updatedSettings: CycleSettings; updatedLogs: Record<string, DailyCycleLog> } => {
+  const existingHistory = getConsolidatedPeriodHistory(currentSettings, currentLogs);
+  const filtered = existingHistory.filter((h) => h.startDate !== startDateToRemove);
+
+  const newLatest = filtered.length > 0 ? filtered[filtered.length - 1].startDate : formatDate(addDays(new Date(), -10));
+
+  const updatedSettings: CycleSettings = {
+    ...currentSettings,
+    lastPeriodStartDate: newLatest,
+    history: filtered,
+  };
+
+  return { updatedSettings, updatedLogs: currentLogs };
+};
+
+/**
+ * Calculate future predicted cycles (e.g. next 3-6 cycles)
+ */
+export const getFutureCyclePredictions = (
+  cycleSettings: CycleSettings = { cycleLength: 28, periodDuration: 5, enabled: true },
+  cycleLogs: Record<string, DailyCycleLog> = {},
+  count: number = 4
+): PredictedCycle[] => {
+  const history = getConsolidatedPeriodHistory(cycleSettings, cycleLogs);
+  const latestRecord = history[history.length - 1];
+  const baseStart = parseDate(latestRecord?.startDate || cycleSettings.lastPeriodStartDate || formatDate(new Date()));
+  const cycleLength = cycleSettings.cycleLength || 28;
+  const periodDuration = cycleSettings.periodDuration || 5;
+
+  const predictions: PredictedCycle[] = [];
+  let currentStart = new Date(baseStart);
+
+  // If baseStart is in the past, advance until we reach current/next cycle
+  const today = new Date();
+  while (diffDays(today, currentStart) >= cycleLength) {
+    currentStart = addDays(currentStart, cycleLength);
+  }
+
+  for (let i = 0; i < count; i++) {
+    const cycleStart = addDays(currentStart, i * cycleLength);
+    const cycleEnd = addDays(cycleStart, periodDuration - 1);
+    const ovulationDay = Math.max(1, cycleLength - 14);
+    const ovulationDate = addDays(cycleStart, ovulationDay - 1);
+    const fertileStart = addDays(ovulationDate, -5);
+    const fertileEnd = addDays(ovulationDate, 1);
+
+    predictions.push({
+      cycleIndex: i + 1,
+      startDate: formatDate(cycleStart),
+      endDate: formatDate(cycleEnd),
+      ovulationDate: formatDate(ovulationDate),
+      fertileStartDate: formatDate(fertileStart),
+      fertileEndDate: formatDate(fertileEnd),
+      cycleLength,
+      periodDuration,
+    });
+  }
+
+  return predictions;
+};
+
+/**
+ * Get the most relevant cycle start anchor date and effective cycle length for a target date
+ */
+export const getMostRecentCycleStartInfo = (
+  targetDate: Date,
+  cycleSettings: CycleSettings = { cycleLength: 28, periodDuration: 5, enabled: true },
+  cycleLogs: Record<string, DailyCycleLog> = {}
+): { cycleStart: Date; effectiveCycleLength: number; effectivePeriodDuration: number } => {
+  const history = getConsolidatedPeriodHistory(cycleSettings, cycleLogs);
+  const defaultCycleLength = cycleSettings.cycleLength || 28;
+  const defaultPeriodDuration = cycleSettings.periodDuration || 5;
+
+  if (history.length === 0) {
+    const def = addDays(new Date(), -10);
+    return {
+      cycleStart: def,
+      effectiveCycleLength: defaultCycleLength,
+      effectivePeriodDuration: defaultPeriodDuration,
+    };
+  }
+
+  // Find where targetDate falls within historical segments
+  for (let i = 0; i < history.length - 1; i++) {
+    const startA = parseDate(history[i].startDate);
+    const startB = parseDate(history[i + 1].startDate);
+
+    if (targetDate.getTime() >= startA.getTime() && targetDate.getTime() < startB.getTime()) {
+      const segCycleLength = history[i].cycleLength || diffDays(startB, startA) || defaultCycleLength;
+      return {
+        cycleStart: startA,
+        effectiveCycleLength: segCycleLength,
+        effectivePeriodDuration: history[i].duration || defaultPeriodDuration,
+      };
+    }
+  }
+
+  // Check latest historical record
+  const latest = history[history.length - 1];
+  const latestStart = parseDate(latest.startDate);
+
+  if (targetDate.getTime() >= latestStart.getTime()) {
+    // Project forward from latest start using current default cycle length
+    let current = new Date(latestStart);
+    while (diffDays(targetDate, current) >= defaultCycleLength) {
+      current = addDays(current, defaultCycleLength);
+    }
+    return {
+      cycleStart: current,
+      effectiveCycleLength: defaultCycleLength,
+      effectivePeriodDuration: defaultPeriodDuration,
+    };
+  }
+
+  // If targetDate is before oldest historical record, project backwards
+  const oldest = history[0];
+  const oldestStart = parseDate(oldest.startDate);
+  let current = new Date(oldestStart);
+  while (current.getTime() > targetDate.getTime()) {
+    current = addDays(current, -defaultCycleLength);
+  }
+  return {
+    cycleStart: current,
+    effectiveCycleLength: defaultCycleLength,
+    effectivePeriodDuration: defaultPeriodDuration,
+  };
+};
+
+/**
+ * Get the cycle start anchor date for calculations
  */
 export const getMostRecentCycleStart = (
   targetDate: Date,
   cycleSettings: CycleSettings = { cycleLength: 28, periodDuration: 5, enabled: true },
   cycleLogs: Record<string, DailyCycleLog> = {}
 ): Date => {
-  const starts = getPeriodStartDates(cycleSettings, cycleLogs).map(parseDate);
-  const cycleLength = cycleSettings.cycleLength || 28;
-
-  // Filter starts on or before target date
-  const pastStarts = starts.filter((s) => s.getTime() <= targetDate.getTime());
-  if (pastStarts.length > 0) {
-    const latestKnown = pastStarts[pastStarts.length - 1];
-    // Project forward by cycleLength until closest cycle before targetDate
-    let current = new Date(latestKnown);
-    while (diffDays(targetDate, current) >= cycleLength) {
-      current = addDays(current, cycleLength);
-    }
-    return current;
-  }
-
-  // If target date is before all known starts, project backwards
-  let current = new Date(starts[0]);
-  while (current.getTime() > targetDate.getTime()) {
-    current = addDays(current, -cycleLength);
-  }
-  return current;
+  return getMostRecentCycleStartInfo(targetDate, cycleSettings, cycleLogs).cycleStart;
 };
 
 /**
@@ -172,10 +451,9 @@ export const getDayCycleInfo = (
   cycleLogs: Record<string, DailyCycleLog> = {}
 ): DayCycleInfo => {
   const targetDate = parseDate(dateStr);
-  const cycleLength = cycleSettings.cycleLength || 28;
-  const periodDuration = cycleSettings.periodDuration || 5;
+  const { cycleStart, effectiveCycleLength: cycleLength, effectivePeriodDuration: periodDuration } =
+    getMostRecentCycleStartInfo(targetDate, cycleSettings, cycleLogs);
 
-  const cycleStart = getMostRecentCycleStart(targetDate, cycleSettings, cycleLogs);
   const cycleDayNumber = (diffDays(targetDate, cycleStart) % cycleLength) + 1;
   const cycleDay = cycleDayNumber > 0 ? cycleDayNumber : cycleDayNumber + cycleLength;
 

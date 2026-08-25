@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Heart,
@@ -16,14 +16,22 @@ import {
   Activity,
   Smile,
   AlertCircle,
+  Clock,
+  History,
+  Trash2,
+  PlusCircle,
 } from 'lucide-react';
-import { DailyCycleLog, CycleSettings } from '../types';
+import { DailyCycleLog, CycleSettings, PeriodRecord } from '../types';
 import {
   CYCLE_SYMPTOMS,
   FLOW_LEVELS,
   CERVICAL_MUCUS,
   getDayCycleInfo,
   DayCycleInfo,
+  getConsolidatedPeriodHistory,
+  getFutureCyclePredictions,
+  logNewPeriodStart,
+  removePeriodFromHistory,
 } from '../utils/cycle';
 import { soundService } from '../services/sound';
 import { formatDateVN } from '../utils/date';
@@ -37,6 +45,7 @@ interface CycleTrackerModalProps {
   cycleLogs: Record<string, DailyCycleLog>;
   onSaveLog: (date: string, log: DailyCycleLog) => void;
   onSaveSettings: (settings: CycleSettings) => void;
+  onBatchUpdateCycle?: (settings: CycleSettings, logs: Record<string, DailyCycleLog>) => void;
   onSendPartnerCareAction?: (actionText: string) => void;
 }
 
@@ -48,9 +57,10 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
   cycleLogs,
   onSaveLog,
   onSaveSettings,
+  onBatchUpdateCycle,
   onSendPartnerCareAction,
 }) => {
-  const [activeTab, setActiveTab] = useState<'log' | 'overview' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'log' | 'history' | 'settings'>('overview');
 
   // Existing log for the selected date
   const existingLog = cycleLogs[selectedDate];
@@ -64,6 +74,12 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
   const [cervicalMucus, setCervicalMucus] = useState<DailyCycleLog['cervicalMucus']>(existingLog?.cervicalMucus || 'dry');
   const [notes, setNotes] = useState<string>(existingLog?.notes || '');
   const [isSavedNotice, setIsSavedNotice] = useState(false);
+
+  // Proactive Period Start Modal / Form inside Tracker
+  const [showProactiveModal, setShowProactiveModal] = useState(false);
+  const [proactiveStartDate, setProactiveStartDate] = useState(selectedDate);
+  const [proactiveDuration, setProactiveDuration] = useState(cycleSettings.periodDuration || 5);
+  const [proactiveNotes, setProactiveNotes] = useState('');
 
   // Settings form states
   const [cycleLengthInput, setCycleLengthInput] = useState<number>(cycleSettings.cycleLength || 28);
@@ -98,10 +114,23 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
       setCervicalMucus('dry');
       setNotes('');
     }
+    setProactiveStartDate(selectedDate);
   }, [selectedDate, cycleLogs, cycleSettings]);
 
   // Current Day info
-  const dayInfo: DayCycleInfo = getDayCycleInfo(selectedDate, cycleSettings, cycleLogs);
+  const dayInfo: DayCycleInfo = useMemo(() => {
+    return getDayCycleInfo(selectedDate, cycleSettings, cycleLogs);
+  }, [selectedDate, cycleSettings, cycleLogs]);
+
+  // Consolidated Period History list
+  const historyList = useMemo(() => {
+    return getConsolidatedPeriodHistory(cycleSettings, cycleLogs);
+  }, [cycleSettings, cycleLogs]);
+
+  // Future predictions list
+  const futurePredictions = useMemo(() => {
+    return getFutureCyclePredictions(cycleSettings, cycleLogs, 4);
+  }, [cycleSettings, cycleLogs]);
 
   const toggleSymptom = (id: string) => {
     soundService.playPop();
@@ -139,10 +168,52 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
     }, 1200);
   };
 
+  // Proactively record a new period start date without breaking previous history
+  const handleConfirmProactivePeriod = (e: React.FormEvent) => {
+    e.preventDefault();
+    soundService.playSparkle();
+
+    const { updatedSettings, updatedLogs } = logNewPeriodStart(
+      proactiveStartDate,
+      proactiveDuration,
+      proactiveNotes,
+      cycleSettings,
+      cycleLogs
+    );
+
+    if (onBatchUpdateCycle) {
+      onBatchUpdateCycle(updatedSettings, updatedLogs);
+    } else {
+      onSaveSettings(updatedSettings);
+      Object.keys(updatedLogs).forEach((d) => onSaveLog(d, updatedLogs[d]));
+    }
+
+    setShowProactiveModal(false);
+    setProactiveNotes('');
+    setActionSuccessNotice(`🩸 Đã ghi nhận kỳ kinh mới từ ${formatDateVN(proactiveStartDate)}! Lịch sử các kỳ trước được giữ nguyên và chu kỳ tương lai đã được cập nhật.`);
+    setTimeout(() => setActionSuccessNotice(null), 5000);
+  };
+
+  const handleDeleteHistoryItem = (startDate: string) => {
+    if (!window.confirm(`Bạn có chắc muốn xóa bản ghi kỳ kinh ngày ${formatDateVN(startDate)} khỏi lịch sử?`)) {
+      return;
+    }
+    soundService.playPop();
+    const { updatedSettings, updatedLogs } = removePeriodFromHistory(startDate, cycleSettings, cycleLogs);
+    if (onBatchUpdateCycle) {
+      onBatchUpdateCycle(updatedSettings, updatedLogs);
+    } else {
+      onSaveSettings(updatedSettings);
+    }
+    setActionSuccessNotice(`Đã xóa bản ghi ngày ${formatDateVN(startDate)}.`);
+    setTimeout(() => setActionSuccessNotice(null), 3000);
+  };
+
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
     soundService.playSparkle();
     onSaveSettings({
+      ...cycleSettings,
       cycleLength: Number(cycleLengthInput) || 28,
       periodDuration: Number(periodDurationInput) || 5,
       lastPeriodStartDate: lastPeriodDateInput,
@@ -203,48 +274,60 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
           </div>
 
           {/* Tab Navigation */}
-          <div className="flex border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/50 px-6 pt-2">
+          <div className="flex border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/50 px-4 sm:px-6 pt-2 overflow-x-auto scrollbar-none gap-1">
             <button
               onClick={() => setActiveTab('overview')}
-              className={`px-4 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition cursor-pointer flex items-center gap-1.5 ${
+              className={`px-3 sm:px-4 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeTab === 'overview'
                   ? 'border-rose-500 text-rose-600 dark:text-rose-400'
                   : 'border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
               }`}
             >
               <Activity className="w-4 h-4" />
-              <span>Tổng Quan Chu Kỳ</span>
+              <span>Tổng Quan</span>
             </button>
 
             <button
               onClick={() => setActiveTab('log')}
-              className={`px-4 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition cursor-pointer flex items-center gap-1.5 ${
+              className={`px-3 sm:px-4 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeTab === 'log'
                   ? 'border-rose-500 text-rose-600 dark:text-rose-400'
                   : 'border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
               }`}
             >
               <Droplet className="w-4 h-4" />
-              <span>Ghi Nhật Ký ({selectedDate})</span>
+              <span>Ghi Nhật Ký ({formatDateVN(selectedDate)})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('history')}
+              className={`px-3 sm:px-4 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeTab === 'history'
+                  ? 'border-rose-500 text-rose-600 dark:text-rose-400'
+                  : 'border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
+              }`}
+            >
+              <History className="w-4 h-4" />
+              <span>Lịch Sử & Dự Báo</span>
             </button>
 
             <button
               onClick={() => setActiveTab('settings')}
-              className={`px-4 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition cursor-pointer flex items-center gap-1.5 ml-auto ${
+              className={`px-3 sm:px-4 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ml-auto ${
                 activeTab === 'settings'
                   ? 'border-rose-500 text-rose-600 dark:text-rose-400'
                   : 'border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
               }`}
             >
               <Settings className="w-4 h-4" />
-              <span>Cài Đặt Chu Kỳ</span>
+              <span>Cài Đặt</span>
             </button>
           </div>
 
           {/* Success Toast / Action Notice */}
           {actionSuccessNotice && (
             <div className="mx-6 mt-4 p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-bold font-cute flex items-center gap-2">
-              <Check className="w-4 h-4" />
+              <Check className="w-4 h-4 shrink-0" />
               <span>{actionSuccessNotice}</span>
             </div>
           )}
@@ -256,6 +339,31 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
             {/* ================================================================= */}
             {activeTab === 'overview' && (
               <div className="space-y-6">
+                {/* Proactive Period Logging Action Card */}
+                <div className="p-4 rounded-3xl bg-gradient-to-r from-rose-500/10 via-pink-500/10 to-purple-500/10 dark:from-rose-950/40 dark:to-zinc-800 border border-rose-200 dark:border-rose-900/50 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs">
+                  <div className="flex items-center gap-3 text-center sm:text-left">
+                    <div className="w-10 h-10 rounded-2xl bg-rose-500 text-white flex items-center justify-center shrink-0 shadow-md shadow-rose-300 dark:shadow-none">
+                      <Droplet className="w-5 h-5 fill-current" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 font-cute">
+                        Cập Nhật Ngày Đến Kỳ Kinh Chủ Động 🩸
+                      </h4>
+                      <p className="text-[11px] text-zinc-600 dark:text-zinc-400 font-cute">
+                        Đánh dấu ngày bắt đầu kỳ kinh mới để tự động cập nhật chu kỳ sau này mà không làm ảnh hưởng lịch sử trước đó.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowProactiveModal(true)}
+                    className="w-full sm:w-auto px-4 py-2.5 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white text-xs font-bold shadow-md shadow-rose-200 dark:shadow-none transition active:scale-95 cursor-pointer whitespace-nowrap flex items-center justify-center gap-1.5"
+                  >
+                    <PlusCircle className="w-4 h-4" />
+                    <span>Đánh dấu kỳ kinh mới</span>
+                  </button>
+                </div>
+
                 {/* Flo-style Visual Circular Wheel & Status Card */}
                 <div className="p-6 rounded-3xl bg-gradient-to-br from-rose-50/80 via-pink-50/30 to-purple-50/60 dark:from-zinc-800 dark:to-zinc-900 border border-rose-100 dark:border-zinc-800 text-center relative overflow-hidden">
                   {/* Phase Pill */}
@@ -330,7 +438,7 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
                   </div>
                 </div>
 
-                {/* Partner Care Guide (Dành cho người yêu chăm sóc bạn gái) */}
+                {/* Partner Care Guide */}
                 <div className="p-5 rounded-3xl bg-gradient-to-br from-purple-500/10 via-pink-500/10 to-rose-500/10 dark:from-purple-950/40 dark:to-zinc-800 border border-purple-200/80 dark:border-purple-900/50 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -534,14 +642,136 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
                     type="submit"
                     className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white font-bold text-xs sm:text-sm shadow-md shadow-rose-200 dark:shadow-none transition active:scale-95 cursor-pointer"
                   >
-                    Lưu Dữ Liệu Ngày {selectedDate} 🩸
+                    Lưu Dữ Liệu Ngày {formatDateVN(selectedDate)} 🩸
                   </button>
                 </div>
               </form>
             )}
 
             {/* ================================================================= */}
-            {/* TAB 3: CYCLE CONFIGURATION (LENGTH, DURATION, START DATE)         */}
+            {/* TAB 3: PERIOD HISTORY & SMART FUTURE PREDICTIONS                  */}
+            {/* ================================================================= */}
+            {activeTab === 'history' && (
+              <div className="space-y-6">
+                {/* Header Action */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-bold text-sm text-zinc-900 dark:text-zinc-100 font-cute flex items-center gap-2">
+                      <History className="w-4 h-4 text-rose-500" />
+                      <span>Lịch Sử Các Kỳ Kinh Đã Ghi Nhận</span>
+                    </h4>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      Lịch sử từng tháng được bảo toàn 100%, không bị sai lệch khi cập nhật kỳ mới
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowProactiveModal(true)}
+                    className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-600 dark:text-rose-300 hover:bg-rose-100 text-xs font-bold flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+                  >
+                    <PlusCircle className="w-3.5 h-3.5" />
+                    <span>Thêm kỳ kinh mới</span>
+                  </button>
+                </div>
+
+                {/* History List */}
+                <div className="space-y-2.5">
+                  {historyList.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-zinc-400 bg-zinc-50 dark:bg-zinc-800/40 rounded-2xl border border-dashed border-zinc-200 dark:border-zinc-700">
+                      Chưa có kỳ kinh nào được ghi nhận. Bấm nút "Thêm kỳ kinh mới" để bắt đầu theo dõi.
+                    </div>
+                  ) : (
+                    historyList
+                      .slice()
+                      .reverse()
+                      .map((item, idx) => (
+                        <div
+                          key={item.startDate}
+                          className="p-4 rounded-2xl bg-white dark:bg-zinc-800/80 border border-rose-100 dark:border-zinc-700 flex items-center justify-between shadow-xs hover:border-rose-300 transition"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-300 flex items-center justify-center font-bold text-xs shrink-0">
+                              🩸 #{historyList.length - idx}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 font-mono">
+                                  {formatDateVN(item.startDate)}
+                                </span>
+                                {idx === 0 && (
+                                  <span className="px-2 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-bold">
+                                    Kỳ gần nhất
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-3 text-[11px] text-zinc-500 dark:text-zinc-400 font-cute mt-0.5">
+                                <span>Hành kinh: <strong>{item.duration || 5} ngày</strong></span>
+                                {item.cycleLength && (
+                                  <span>• Chu kỳ: <strong className="text-rose-600 dark:text-rose-400">{item.cycleLength} ngày</strong></span>
+                                )}
+                                {item.notes && <span className="italic">• "{item.notes}"</span>}
+                              </div>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteHistoryItem(item.startDate)}
+                            title="Xóa kỳ kinh này khỏi lịch sử"
+                            className="p-2 rounded-xl text-zinc-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-zinc-700 transition cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))
+                  )}
+                </div>
+
+                {/* Smart Predictions for Upcoming Cycles */}
+                <div className="pt-2 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-purple-500" />
+                    <h4 className="font-bold text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 font-cute">
+                      Dự Báo Thông Minh 4 Chu Kỳ Tương Lai ✨
+                    </h4>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {futurePredictions.map((pred) => (
+                      <div
+                        key={pred.cycleIndex}
+                        className="p-4 rounded-2xl bg-gradient-to-br from-rose-50/50 via-purple-50/30 to-white dark:from-zinc-800 dark:to-zinc-900 border border-rose-100 dark:border-zinc-700 space-y-2"
+                      >
+                        <div className="flex items-center justify-between text-xs font-bold text-rose-600 dark:text-rose-400">
+                          <span>Chu kỳ dự kiến #{pred.cycleIndex}</span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 font-mono">
+                            {pred.cycleLength} ngày
+                          </span>
+                        </div>
+
+                        <div className="space-y-1 text-xs text-zinc-700 dark:text-zinc-300 font-cute">
+                          <div className="flex items-center justify-between">
+                            <span className="text-zinc-500">🩸 Kỳ kinh:</span>
+                            <strong className="font-mono">{formatDateVN(pred.startDate)} → {formatDateVN(pred.endDate)}</strong>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-purple-600 dark:text-purple-400">🌸 Rụng trứng:</span>
+                            <strong className="font-mono text-purple-700 dark:text-purple-300">{formatDateVN(pred.ovulationDate)}</strong>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-amber-600 dark:text-amber-400">✨ Cửa sổ thụ thai:</span>
+                            <strong className="font-mono text-amber-700 dark:text-amber-300">{formatDateVN(pred.fertileStartDate)} → {formatDateVN(pred.fertileEndDate)}</strong>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ================================================================= */}
+            {/* TAB 4: CYCLE CONFIGURATION (LENGTH, DURATION, START DATE)         */}
             {/* ================================================================= */}
             {activeTab === 'settings' && (
               <form onSubmit={handleSaveSettings} className="space-y-4">
@@ -609,6 +839,91 @@ export const CycleTrackerModal: React.FC<CycleTrackerModalProps> = ({
               </form>
             )}
           </div>
+
+          {/* Sub-Modal / Bottom Sheet for Proactive Period Start */}
+          {showProactiveModal && (
+            <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+              <div className="w-full max-w-md rounded-3xl bg-white dark:bg-zinc-900 border border-rose-200 dark:border-zinc-800 p-6 shadow-2xl space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-bold text-sm sm:text-base font-cute">
+                    <Droplet className="w-5 h-5 fill-current" />
+                    <span>Đánh Dấu Bắt Đầu Kỳ Kinh Mới 🩸</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowProactiveModal(false)}
+                    className="p-1 rounded-full text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <p className="text-xs text-zinc-600 dark:text-zinc-300 font-cute leading-relaxed">
+                  Lựa chọn ngày bắt đầu kinh nguyệt của kỳ này. Hệ thống sẽ tự động cập nhật các chu kỳ tương lai và giữ nguyên toàn bộ lịch sử các tháng trước!
+                </p>
+
+                <form onSubmit={handleConfirmProactivePeriod} className="space-y-4">
+                  <div>
+                    <DateInputVN
+                      label="Ngày bắt đầu kỳ kinh mới:"
+                      required
+                      value={proactiveStartDate}
+                      onChange={(val) => setProactiveStartDate(val)}
+                      placeholder="dd/mm/yyyy"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1 font-cute">
+                      Số ngày hành kinh dự kiến:
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={2}
+                        max={10}
+                        required
+                        value={proactiveDuration}
+                        onChange={(e) => setProactiveDuration(Number(e.target.value))}
+                        className="w-full px-3 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-800 dark:text-zinc-100"
+                      />
+                      <span className="text-xs text-zinc-500 font-bold whitespace-nowrap">ngày</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1 font-cute">
+                      Ghi chú triệu chứng ngày đầu (tùy chọn):
+                    </label>
+                    <input
+                      type="text"
+                      value={proactiveNotes}
+                      onChange={(e) => setProactiveNotes(e.target.value)}
+                      placeholder="Ví dụ: Đau nhẹ bụng dưới, hơi mỏi lưng..."
+                      className="w-full px-3 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-100"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowProactiveModal(false)}
+                      className="px-4 py-2 rounded-xl text-xs font-bold text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
+                    >
+                      Hủy bỏ
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-500 to-pink-500 text-white font-bold text-xs shadow-md shadow-rose-200 dark:shadow-none transition active:scale-95 cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Check className="w-4 h-4" />
+                      <span>Xác Nhận Kỳ Kinh Mới 🩸</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
         </motion.div>
       </div>
     </AnimatePresence>

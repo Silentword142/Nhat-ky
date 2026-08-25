@@ -550,6 +550,13 @@ export async function saveCoupleDataToDrive(
 
     const resultData = await uploadRes.json();
 
+    // Auto-save human-readable Diary book to Google Drive if diaries exist
+    if (Array.isArray(fullData.diaries) && fullData.diaries.length > 0) {
+      saveDiariesFormattedBookToDrive(accessToken, cleanRoomCode, fullData.diaries).catch((e) =>
+        console.warn('Silent saveDiariesFormattedBookToDrive warning:', e)
+      );
+    }
+
     return {
       success: true,
       fileId: resultData.id,
@@ -643,5 +650,107 @@ export async function listDriveBackups(accessToken: string): Promise<DriveBackup
   } catch (err) {
     console.error('listDriveBackups Error:', err);
     return [];
+  }
+}
+
+/**
+ * Save / Update a human-readable Diary book (.txt) in Google Drive
+ * Allows couple to read all their memories directly inside Google Drive anytime!
+ */
+export async function saveDiariesFormattedBookToDrive(
+  accessToken: string,
+  roomCode: string,
+  diaries: Array<any>
+): Promise<boolean> {
+  try {
+    const cleanRoomCode = (roomCode || 'DEFAULT').toUpperCase().trim();
+    const folderId = await findOrCreateAppFolder(accessToken);
+    const fileName = `Nhat_Ky_Tinh_Yeu_${cleanRoomCode}.txt`;
+
+    // Format readable diary text
+    const sortedDiaries = [...diaries].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+    let textContent = `========================================================================\n`;
+    textContent += `💖 CUỐN SỔ NHẬT KÝ TÌNH YÊU - LOVESYNC 💖\n`;
+    textContent += `Mã phòng chung đôi: ${cleanRoomCode}\n`;
+    textContent += `Ngày cập nhật sao lưu: ${new Date().toLocaleString('vi-VN')}\n`;
+    textContent += `Tổng số trang nhật ký: ${sortedDiaries.length} trang kỷ niệm\n`;
+    textContent += `========================================================================\n\n`;
+
+    sortedDiaries.forEach((d, idx) => {
+      textContent += `------------------------------------------------------------------------\n`;
+      textContent += `📖 TRANG ${idx + 1}: ${d.date ? new Date(d.date).toLocaleDateString('vi-VN') : 'Không rõ ngày'}\n`;
+      if (d.authorName) textContent += `✍️ Tác giả: ${d.authorName}\n`;
+      if (d.title) textContent += `📌 Tiêu đề: ${d.title}\n`;
+      if (d.mood) textContent += `😊 Tâm trạng: ${d.mood}\n`;
+      if (d.weather) textContent += `☀️ Thời tiết: ${d.weather}\n`;
+      if (d.location) textContent += `📍 Địa điểm: ${d.location}\n`;
+      textContent += `\n📝 NỘI DUNG:\n${d.content || '(Không có nội dung)'}\n`;
+      if (Array.isArray(d.photos) && d.photos.length > 0) {
+        textContent += `\n📸 Ảnh đính kèm (${d.photos.length} ảnh):\n`;
+        d.photos.forEach((p: string, pIdx: number) => {
+          textContent += `  [${pIdx + 1}] ${p}\n`;
+        });
+      }
+      textContent += `\n`;
+    });
+
+    textContent += `========================================================================\n`;
+    textContent += `Được đồng bộ tự động từ LoveSync - Giữ trọn từng khoảnh khắc yêu thương 💕\n`;
+    textContent += `========================================================================\n`;
+
+    // Search for existing file
+    const searchFileQuery = `name = '${fileName}' and '${folderId}' in parents and trashed = false`;
+    const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(searchFileQuery)}&fields=files(id, name)&spaces=drive`;
+
+    const searchRes = await fetch(searchUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    const searchData = searchRes.ok ? await searchRes.json() : { files: [] };
+    const existingFile = searchData.files && searchData.files.length > 0 ? searchData.files[0] : null;
+
+    const boundary = '-------DiaryBookBoundary' + Math.random().toString(36).substring(2);
+    const delimiter = `\r\n--${boundary}\r\n`;
+    const closeDelimiter = `\r\n--${boundary}--`;
+
+    let uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime';
+    let method = 'POST';
+
+    const metadata: Record<string, any> = {
+      name: fileName,
+      mimeType: 'text/plain',
+      description: `Sổ nhật ký tình yêu LoveSync phòng ${cleanRoomCode} - Đọc trực tiếp trên Drive`,
+    };
+
+    if (existingFile) {
+      uploadUrl = `https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=multipart&fields=id,name,modifiedTime`;
+      method = 'PATCH';
+    } else {
+      metadata.parents = [folderId];
+    }
+
+    const multipartRequestBody =
+      delimiter +
+      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+      JSON.stringify(metadata) +
+      delimiter +
+      'Content-Type: text/plain; charset=UTF-8\r\n\r\n' +
+      textContent +
+      closeDelimiter;
+
+    const uploadRes = await fetch(uploadUrl, {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body: multipartRequestBody,
+    });
+
+    return uploadRes.ok;
+  } catch (err) {
+    console.error('saveDiariesFormattedBookToDrive error:', err);
+    return false;
   }
 }

@@ -897,41 +897,33 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         ...(driveExistingData?.deletedItemIds || []),
       ];
 
-      // Merge only fresh mutations created in THIS active session; otherwise take the newest remote data directly!
-      const mergedDiaries = mergeWithAuthoritativeRemote<DiaryEntry>(
-        diaries,
-        baseData?.diaries || (isDriveNewer ? serverRoom?.diaries : driveExistingData?.diaries) || [],
-        deletedIds,
-        hasUserMutatedRef.current,
-        baseTime
-      );
+      // Safely merge all collections: local items + remote server + remote drive items
+      const remoteDiaries = [
+        ...(serverRoom?.diaries || []),
+        ...(driveExistingData?.diaries || []),
+      ];
+      const mergedDiaries = smartMergeCollections<DiaryEntry>(diaries, remoteDiaries, deletedIds);
       mergedDiaries.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
 
-      const mergedPhotos = mergeWithAuthoritativeRemote<PhotoMemory>(
-        photos,
-        baseData?.photos || (isDriveNewer ? serverRoom?.photos : driveExistingData?.photos) || [],
-        deletedIds,
-        hasUserMutatedRef.current,
-        baseTime
-      );
+      const remotePhotos = [
+        ...(serverRoom?.photos || []),
+        ...(driveExistingData?.photos || []),
+      ];
+      const mergedPhotos = smartMergeCollections<PhotoMemory>(photos, remotePhotos, deletedIds);
       mergedPhotos.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
 
-      const mergedCards = mergeWithAuthoritativeRemote<HandwrittenCard>(
-        cards,
-        baseData?.cards || (isDriveNewer ? serverRoom?.cards : driveExistingData?.cards) || [],
-        deletedIds,
-        hasUserMutatedRef.current,
-        baseTime
-      );
+      const remoteCards = [
+        ...(serverRoom?.cards || []),
+        ...(driveExistingData?.cards || []),
+      ];
+      const mergedCards = smartMergeCollections<HandwrittenCard>(cards, remoteCards, deletedIds);
       mergedCards.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
 
-      const mergedAnniversaries = mergeWithAuthoritativeRemote<AnniversaryEvent>(
-        anniversaries,
-        baseData?.anniversaries || (isDriveNewer ? serverRoom?.anniversaries : driveExistingData?.anniversaries) || [],
-        deletedIds,
-        hasUserMutatedRef.current,
-        baseTime
-      );
+      const remoteAnniversaries = [
+        ...(serverRoom?.anniversaries || []),
+        ...(driveExistingData?.anniversaries || []),
+      ];
+      const mergedAnniversaries = smartMergeCollections<AnniversaryEvent>(anniversaries, remoteAnniversaries, deletedIds);
 
       let currentPlaylist = roomPlaylist;
       if (!currentPlaylist || currentPlaylist.length === 0 || !hasUserMutatedRef.current) {

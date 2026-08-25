@@ -48,11 +48,22 @@ export interface DailyCycleLog {
   updatedAt: number;
 }
 
+export interface PeriodRecord {
+  id: string;
+  startDate: string; // YYYY-MM-DD
+  endDate?: string; // YYYY-MM-DD
+  duration: number; // days of bleeding, default 5
+  cycleLength?: number; // actual length of cycle to next period
+  notes?: string;
+  loggedAt: number;
+}
+
 export interface CycleSettings {
   cycleLength: number; // default 28 days
   periodDuration: number; // default 5 days
   lastPeriodStartDate?: string; // YYYY-MM-DD
   enabled: boolean;
+  history?: PeriodRecord[]; // List of all past logged period cycles
 }
 
 export interface CoupleSettings {
