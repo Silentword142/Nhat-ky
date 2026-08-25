@@ -34,7 +34,7 @@ export function getOAuthClientId(): string {
     const custom = localStorage.getItem(CLIENT_ID_STORAGE_KEY)?.trim();
     if (custom) return custom;
   }
-  return DEFAULT_PROD_CLIENT_ID || (firebaseConfig as any).oAuthClientId || '';
+  return (firebaseConfig as any).oAuthClientId || import.meta.env?.VITE_GOOGLE_CLIENT_ID || DEFAULT_PROD_CLIENT_ID || '';
 }
 
 /**
