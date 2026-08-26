@@ -150,6 +150,7 @@ export interface PhotoMemory {
   title: string;
   caption: string;
   imageUrl: string;
+  thumbnailUrl?: string;
   originalFileId?: string;
   driveFolderId?: string;
   driveViewUrl?: string;

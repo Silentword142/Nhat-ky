@@ -11,6 +11,7 @@ interface SmartDriveImageProps extends React.ImgHTMLAttributes<HTMLImageElement>
   className?: string;
   containerClassName?: string;
   showDriveBadge?: boolean;
+  thumbnailSize?: number; // e.g. 500 for fast grid rendering, or null/undefined for full size
 }
 
 export const SmartDriveImage: React.FC<SmartDriveImageProps> = ({
@@ -21,14 +22,24 @@ export const SmartDriveImage: React.FC<SmartDriveImageProps> = ({
   className = '',
   containerClassName = '',
   showDriveBadge = false,
+  thumbnailSize = 500,
   onClick,
   ...imgProps
 }) => {
+  // Compute optimized URL based on thumbnail size
+  const getOptimizedSrc = (rawSrc: string): string => {
+    if (!rawSrc) return '';
+    if (thumbnailSize && rawSrc.includes('drive.google.com/thumbnail')) {
+      return rawSrc.replace(/sz=w\d+/, `sz=w${thumbnailSize}`);
+    }
+    return rawSrc;
+  };
+
   const [currentSrc, setCurrentSrc] = useState<string>(() => {
     if (originalFileId && driveBlobCache.has(originalFileId)) {
       return driveBlobCache.get(originalFileId)!;
     }
-    return src;
+    return getOptimizedSrc(src);
   });
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -59,10 +70,10 @@ export const SmartDriveImage: React.FC<SmartDriveImageProps> = ({
       setHasError(false);
       return;
     }
-    setCurrentSrc(src);
+    setCurrentSrc(getOptimizedSrc(src));
     setIsLoading(true);
     setHasError(false);
-  }, [src, resolvedFileId]);
+  }, [src, resolvedFileId, thumbnailSize]);
 
   // Fallback handler if image fails to load
   const handleImageError = async () => {
@@ -157,6 +168,8 @@ export const SmartDriveImage: React.FC<SmartDriveImageProps> = ({
         </div>
       ) : (
         <img
+          loading="lazy"
+          decoding="async"
           {...imgProps}
           src={currentSrc}
           alt={alt}

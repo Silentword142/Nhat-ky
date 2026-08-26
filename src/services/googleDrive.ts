@@ -599,6 +599,7 @@ export async function scanGoogleDriveFoldersAndPhotos(
         const createdMs = file.createdTime ? new Date(file.createdTime).getTime() : Date.now();
         const dateStr = file.createdTime ? file.createdTime.split('T')[0] : new Date().toISOString().split('T')[0];
         const directUrl = `https://drive.google.com/thumbnail?id=${file.id}&sz=w2560`;
+        const thumbnailUrl = `https://drive.google.com/thumbnail?id=${file.id}&sz=w500`;
         const driveViewUrl = file.webViewLink || `https://drive.google.com/file/d/${file.id}/view`;
         const driveDownloadUrl = `https://drive.google.com/uc?export=download&id=${file.id}`;
 
@@ -609,6 +610,7 @@ export async function scanGoogleDriveFoldersAndPhotos(
           title: file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
           caption: subfolderName ? `Thư mục con: ${subfolderName}` : `Từ thư mục Google Drive "${albumName}"`,
           imageUrl: directUrl,
+          thumbnailUrl,
           originalFileId: file.id,
           driveFolderId: parentId,
           driveViewUrl,

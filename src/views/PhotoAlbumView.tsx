@@ -28,6 +28,9 @@ import {
   Link,
   Settings,
   Copy,
+  Search,
+  ArrowUpDown,
+  Zap,
 } from 'lucide-react';
 import { useCouple } from '../context/CoupleContext';
 import { PhotoMemory, Album } from '../types';
@@ -139,10 +142,24 @@ export const PhotoAlbumView: React.FC = () => {
   // Selected Album: null = Folder Overview list, 'all' = All photos, or album ID/name
   const [activeAlbumId, setActiveAlbumId] = useState<string | null>(null);
 
-  // Reset subfolder when active album changes
+  // Search & Filter & Sort state
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'most_liked'>('newest');
+
+  // Progressive Infinite Scroll & Virtual batching state (36 photos per chunk for instant rendering)
+  const PHOTOS_PAGE_SIZE = 36;
+  const [visiblePhotoCount, setVisiblePhotoCount] = useState(PHOTOS_PAGE_SIZE);
+  const sentinelRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Reset subfolder and pagination when active album or filter changes
   useEffect(() => {
     setActiveSubfolder(null);
+    setVisiblePhotoCount(PHOTOS_PAGE_SIZE);
   }, [activeAlbumId]);
+
+  useEffect(() => {
+    setVisiblePhotoCount(PHOTOS_PAGE_SIZE);
+  }, [activeSubfolder, searchKeyword, sortBy]);
 
   // Lightbox Zoom Viewer state
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -294,7 +311,7 @@ export const PhotoAlbumView: React.FC = () => {
     }));
   }, [currentAlbumObj, photos]);
 
-  // Filtered photos for view
+  // Filtered photos for view with search and sorting
   const currentViewPhotos = useMemo(() => {
     let result = photos;
     if (activeAlbumId && activeAlbumId !== 'all') {
@@ -310,8 +327,55 @@ export const PhotoAlbumView: React.FC = () => {
     if (activeSubfolder) {
       result = result.filter((p) => p.subfolderName === activeSubfolder);
     }
-    return result;
-  }, [photos, activeAlbumId, currentAlbumObj, activeSubfolder]);
+    if (searchKeyword.trim()) {
+      const kw = searchKeyword.toLowerCase().trim();
+      result = result.filter(
+        (p) =>
+          p.title?.toLowerCase().includes(kw) ||
+          p.caption?.toLowerCase().includes(kw) ||
+          p.location?.toLowerCase().includes(kw) ||
+          p.fileName?.toLowerCase().includes(kw) ||
+          p.date?.includes(kw) ||
+          p.tags?.some((t) => t.toLowerCase().includes(kw))
+      );
+    }
+
+    // Sort order
+    return [...result].sort((a, b) => {
+      if (sortBy === 'most_liked') {
+        return (b.likes?.length || 0) - (a.likes?.length || 0);
+      }
+      if (sortBy === 'oldest') {
+        const timeA = a.createdAt || (a.date ? new Date(a.date).getTime() : 0);
+        const timeB = b.createdAt || (b.date ? new Date(b.date).getTime() : 0);
+        return timeA - timeB;
+      }
+      // Default: 'newest'
+      const timeA = a.createdAt || (a.date ? new Date(a.date).getTime() : 0);
+      const timeB = b.createdAt || (b.date ? new Date(b.date).getTime() : 0);
+      return timeB - timeA;
+    });
+  }, [photos, activeAlbumId, currentAlbumObj, activeSubfolder, searchKeyword, sortBy]);
+
+  // Sliced photos for instant, smooth rendering (prevents DOM freeze with 2000+ photos)
+  const visiblePhotos = useMemo(() => {
+    return currentViewPhotos.slice(0, visiblePhotoCount);
+  }, [currentViewPhotos, visiblePhotoCount]);
+
+  // Infinite scroll intersection observer: automatically load next batch when scrolling near bottom
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && visiblePhotoCount < currentViewPhotos.length) {
+          setVisiblePhotoCount((prev) => Math.min(prev + PHOTOS_PAGE_SIZE, currentViewPhotos.length));
+        }
+      },
+      { rootMargin: '600px' }
+    );
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [visiblePhotoCount, currentViewPhotos.length]);
 
   // Scan Drive Folders handler
   const handleScanDriveFolders = useCallback(async (showNotice = true) => {
@@ -879,6 +943,7 @@ export const PhotoAlbumView: React.FC = () => {
               );
               const totalCount = Math.max(albumPhotos.length, album.photoCount || 0);
               const coverImg =
+                albumPhotos[0]?.thumbnailUrl ||
                 albumPhotos[0]?.imageUrl ||
                 album.coverImage ||
                 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=600&auto=format&fit=crop&q=80';
@@ -939,6 +1004,7 @@ export const PhotoAlbumView: React.FC = () => {
                   <div className="relative aspect-4/3 overflow-hidden bg-zinc-100 dark:bg-zinc-800">
                     <SmartDriveImage
                       src={coverImg}
+                      thumbnailSize={600}
                       originalFileId={albumPhotos[0]?.originalFileId}
                       driveViewUrl={albumPhotos[0]?.driveViewUrl}
                       alt={album.name}
@@ -1041,6 +1107,54 @@ export const PhotoAlbumView: React.FC = () => {
             </div>
           )}
 
+          {/* Quick Search, Sort & Performance Toolbar */}
+          <div className="p-3 sm:p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-rose-100 dark:border-zinc-800 shadow-xs flex flex-wrap items-center justify-between gap-3">
+            {/* Search input */}
+            <div className="relative flex-1 min-w-[200px] max-w-md">
+              <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={searchKeyword}
+                onChange={(e) => setSearchKeyword(e.target.value)}
+                placeholder="Tìm theo tên ảnh, ngày (2026-08), địa điểm..."
+                className="w-full pl-9 pr-8 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-100 focus:outline-none focus:border-rose-400 focus:ring-1 focus:ring-rose-400"
+              />
+              {searchKeyword && (
+                <button
+                  onClick={() => setSearchKeyword('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 text-xs"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Sort & Stats Controls */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-800/80 px-2.5 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs">
+                <ArrowUpDown className="w-3.5 h-3.5 text-rose-500" />
+                <span className="text-zinc-500 dark:text-zinc-400 font-medium hidden sm:inline">Sắp xếp:</span>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="bg-transparent text-xs font-bold text-zinc-700 dark:text-zinc-200 focus:outline-none cursor-pointer"
+                >
+                  <option value="newest">Mới nhất trước ⏱️</option>
+                  <option value="oldest">Cũ nhất trước ⏳</option>
+                  <option value="most_liked">Yêu thích nhất ❤️</option>
+                </select>
+              </div>
+
+              {/* Photo count indicator */}
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/40 text-xs font-bold text-rose-600 dark:text-rose-300">
+                <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500 animate-pulse" />
+                <span>
+                  {visiblePhotos.length} / {currentViewPhotos.length} ảnh
+                </span>
+              </div>
+            </div>
+          </div>
+
           {currentViewPhotos.length === 0 ? (
             <div
               className={`text-center py-16 px-4 rounded-3xl ${currentTheme.cardBg} border ${currentTheme.borderSubtle}`}
@@ -1049,135 +1163,186 @@ export const PhotoAlbumView: React.FC = () => {
                 📸
               </div>
               <h3 className="text-lg font-bold text-zinc-800 dark:text-zinc-200 mb-1 font-cute">
-                {activeSubfolder
+                {searchKeyword
+                  ? `Không tìm thấy ảnh nào khớp với "${searchKeyword}"`
+                  : activeSubfolder
                   ? `Thư mục con "${activeSubfolder}" chưa có bức ảnh nào`
                   : 'Tệp album này chưa có bức ảnh nào'}
               </h3>
               <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400 max-w-md mx-auto mb-5">
-                Hãy chọn và tải nhiều bức ảnh cùng lúc để lưu giữ những khoảnh khắc tuyệt vời vào album này nhé!
+                {searchKeyword
+                  ? 'Hãy thử tìm kiếm với từ khóa khác hoặc xóa bộ lọc tìm kiếm.'
+                  : 'Hãy chọn và tải nhiều bức ảnh cùng lúc để lưu giữ những khoảnh khắc tuyệt vời vào album này nhé!'}
               </p>
-              <button
-                onClick={() => {
-                  soundService.playPop();
-                  setUploadAlbumTarget(currentAlbumObj?.name || 'Khoảnh Khắc Hẹn Hò ☕');
-                  setBatchFilesPreview([]);
-                  setIsBatchUploadModalOpen(true);
-                }}
-                className="px-6 py-3 rounded-full bg-gradient-to-r from-[#FF758F] to-[#FF9A9E] text-white text-xs sm:text-sm font-bold shadow-lg shadow-rose-200 dark:shadow-rose-950 hover:scale-105 transition active:scale-95 cursor-pointer"
-              >
-                ✨ Tải Lên Nhiều Ảnh Vào Album Này
-              </button>
+              {searchKeyword ? (
+                <button
+                  onClick={() => setSearchKeyword('')}
+                  className="px-5 py-2.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 text-xs font-bold hover:bg-zinc-300 transition cursor-pointer"
+                >
+                  Xóa bộ lọc tìm kiếm
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    soundService.playPop();
+                    setUploadAlbumTarget(currentAlbumObj?.name || 'Khoảnh Khắc Hẹn Hò ☕');
+                    setBatchFilesPreview([]);
+                    setIsBatchUploadModalOpen(true);
+                  }}
+                  className="px-6 py-3 rounded-full bg-gradient-to-r from-[#FF758F] to-[#FF9A9E] text-white text-xs sm:text-sm font-bold shadow-lg shadow-rose-200 dark:shadow-rose-950 hover:scale-105 transition active:scale-95 cursor-pointer"
+                >
+                  ✨ Tải Lên Nhiều Ảnh Vào Album Này
+                </button>
+              )}
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5 sm:gap-6">
-              {currentViewPhotos.map((photo) => {
-                const isLiked = photo.likes.includes(myProfile.id);
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5 sm:gap-6">
+                {visiblePhotos.map((photo) => {
+                  const isLiked = photo.likes.includes(myProfile.id);
 
-                return (
-                  <motion.div
-                    key={photo.id}
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    whileHover={{ y: -4 }}
-                    className={`group relative rounded-3xl overflow-hidden shadow-md hover:shadow-xl transition-all duration-300 border ${
-                      photo.frameStyle === 'polaroid'
-                        ? 'bg-[#fffefb] dark:bg-zinc-900 border-[#eae3d9] dark:border-zinc-800 p-3.5 pb-4'
-                        : photo.frameStyle === 'sakura'
-                        ? 'bg-rose-50/90 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900/40 p-3'
-                        : photo.frameStyle === 'vintage'
-                        ? 'bg-[#fcf8f2] dark:bg-stone-900 border-[#e3d7c5] dark:border-stone-800 p-3'
-                        : photo.frameStyle === 'heart'
-                        ? 'bg-pink-50/80 dark:bg-pink-950/20 border-pink-200 dark:border-pink-900/40 p-3'
-                        : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 p-3'
-                    }`}
-                  >
-                    {/* Photo with SmartDriveImage & click to open Lightbox with Zoom */}
-                    <div
-                      onClick={() => openLightboxForPhoto(photo)}
-                      className="relative aspect-square rounded-2xl overflow-hidden cursor-pointer group-hover:brightness-105 transition duration-300 bg-zinc-100 dark:bg-zinc-800"
+                  return (
+                    <motion.div
+                      key={photo.id}
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      whileHover={{ y: -4 }}
+                      className={`group relative rounded-3xl overflow-hidden shadow-md hover:shadow-xl transition-all duration-300 border ${
+                        photo.frameStyle === 'polaroid'
+                          ? 'bg-[#fffefb] dark:bg-zinc-900 border-[#eae3d9] dark:border-zinc-800 p-3.5 pb-4'
+                          : photo.frameStyle === 'sakura'
+                          ? 'bg-rose-50/90 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900/40 p-3'
+                          : photo.frameStyle === 'vintage'
+                          ? 'bg-[#fcf8f2] dark:bg-stone-900 border-[#e3d7c5] dark:border-stone-800 p-3'
+                          : photo.frameStyle === 'heart'
+                          ? 'bg-pink-50/80 dark:bg-pink-950/20 border-pink-200 dark:border-pink-900/40 p-3'
+                          : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 p-3'
+                      }`}
                     >
-                      <SmartDriveImage
-                        src={photo.imageUrl}
-                        originalFileId={photo.originalFileId}
-                        driveViewUrl={photo.driveViewUrl}
-                        alt={photo.title}
-                        containerClassName="w-full h-full"
-                        className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
-                        showDriveBadge={true}
-                      />
+                      {/* Photo with SmartDriveImage & click to open Lightbox with Zoom */}
+                      <div
+                        onClick={() => openLightboxForPhoto(photo)}
+                        className="relative aspect-square rounded-2xl overflow-hidden cursor-pointer group-hover:brightness-105 transition duration-300 bg-zinc-100 dark:bg-zinc-800"
+                      >
+                        <SmartDriveImage
+                          src={photo.thumbnailUrl || photo.imageUrl}
+                          thumbnailSize={500}
+                          originalFileId={photo.originalFileId}
+                          driveViewUrl={photo.driveViewUrl}
+                          alt={photo.title}
+                          containerClassName="w-full h-full"
+                          className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
+                          showDriveBadge={true}
+                        />
 
-                      {/* Decorative accents */}
-                      {photo.frameStyle === 'sakura' && (
-                        <span className="absolute top-2 right-2 text-xl drop-shadow-md pointer-events-none">🌸</span>
-                      )}
-                      {photo.frameStyle === 'heart' && (
-                        <span className="absolute top-2 left-2 text-xl drop-shadow-md pointer-events-none">💖</span>
-                      )}
+                        {/* Decorative accents */}
+                        {photo.frameStyle === 'sakura' && (
+                          <span className="absolute top-2 right-2 text-xl drop-shadow-md pointer-events-none">🌸</span>
+                        )}
+                        {photo.frameStyle === 'heart' && (
+                          <span className="absolute top-2 left-2 text-xl drop-shadow-md pointer-events-none">💖</span>
+                        )}
 
-                      {/* Zoom indicator on hover */}
-                      <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-2 pointer-events-none">
-                        <span className="px-3 py-1.5 rounded-full bg-white/95 text-zinc-900 font-bold text-xs shadow-lg flex items-center gap-1.5">
-                          <Maximize2 className="w-3.5 h-3.5 text-rose-500" />
-                          <span>Phóng to & Zoom</span>
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Polaroid Bottom Bar */}
-                    <div className="mt-3">
-                      <div className="flex items-start justify-between gap-1 mb-1">
-                        <h4 className="font-bold text-sm text-zinc-800 dark:text-zinc-100 truncate font-cute">
-                          {photo.title}
-                        </h4>
-                        {/* Like button */}
-                        <button
-                          onClick={() => togglePhotoLike(photo.id)}
-                          className={`p-1.5 rounded-full transition flex items-center gap-1 text-xs font-bold ${
-                            isLiked ? 'text-rose-500' : 'text-zinc-400 hover:text-rose-400'
-                          }`}
-                        >
-                          <Heart className={`w-4 h-4 ${isLiked ? 'fill-rose-500' : ''}`} />
-                          <span>{photo.likes.length}</span>
-                        </button>
-                      </div>
-
-                      {photo.caption && (
-                        <p className="text-xs text-zinc-600 dark:text-zinc-300 line-clamp-2 leading-relaxed mb-2 font-cute">
-                          {photo.caption}
-                        </p>
-                      )}
-
-                      <div className="flex items-center justify-between text-[11px] text-zinc-400 pt-1.5 border-t border-zinc-100 dark:border-zinc-800">
-                        <span className="flex items-center gap-1">
-                          <Calendar className="w-3 h-3" /> {formatDateVN(photo.date)}
-                        </span>
-
-                        <div className="flex items-center gap-2">
-                          {photo.subfolderName && (
-                            <span className="flex items-center gap-0.5 text-amber-500 truncate max-w-[80px]" title={photo.subfolderName}>
-                              <Folder className="w-3 h-3 shrink-0" />
-                              <span className="truncate">{photo.subfolderName}</span>
-                            </span>
-                          )}
-                          {photo.location && (
-                            <span className="flex items-center gap-0.5 truncate max-w-[90px]">
-                              <MapPin className="w-3 h-3" /> {photo.location}
-                            </span>
-                          )}
-                          <button
-                            onClick={() => deletePhoto(photo.id)}
-                            className="p-1 text-zinc-300 hover:text-red-500 transition cursor-pointer"
-                            title="Xóa ảnh này"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                        {/* Zoom indicator on hover */}
+                        <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-2 pointer-events-none">
+                          <span className="px-3 py-1.5 rounded-full bg-white/95 text-zinc-900 font-bold text-xs shadow-lg flex items-center gap-1.5">
+                            <Maximize2 className="w-3.5 h-3.5 text-rose-500" />
+                            <span>Phóng to & Zoom</span>
+                          </span>
                         </div>
                       </div>
-                    </div>
-                  </motion.div>
-                );
-              })}
-            </div>
+
+                      {/* Polaroid Bottom Bar */}
+                      <div className="mt-3">
+                        <div className="flex items-start justify-between gap-1 mb-1">
+                          <h4 className="font-bold text-sm text-zinc-800 dark:text-zinc-100 truncate font-cute">
+                            {photo.title}
+                          </h4>
+                          {/* Like button */}
+                          <button
+                            onClick={() => togglePhotoLike(photo.id)}
+                            className={`p-1.5 rounded-full transition flex items-center gap-1 text-xs font-bold ${
+                              isLiked ? 'text-rose-500' : 'text-zinc-400 hover:text-rose-400'
+                            }`}
+                          >
+                            <Heart className={`w-4 h-4 ${isLiked ? 'fill-rose-500' : ''}`} />
+                            <span>{photo.likes.length}</span>
+                          </button>
+                        </div>
+
+                        {photo.caption && (
+                          <p className="text-xs text-zinc-600 dark:text-zinc-300 line-clamp-2 leading-relaxed mb-2 font-cute">
+                            {photo.caption}
+                          </p>
+                        )}
+
+                        <div className="flex items-center justify-between text-[11px] text-zinc-400 pt-1.5 border-t border-zinc-100 dark:border-zinc-800">
+                          <span className="flex items-center gap-1">
+                            <Calendar className="w-3 h-3" /> {formatDateVN(photo.date)}
+                          </span>
+
+                          <div className="flex items-center gap-2">
+                            {photo.subfolderName && (
+                              <span className="flex items-center gap-0.5 text-amber-500 truncate max-w-[80px]" title={photo.subfolderName}>
+                                <Folder className="w-3 h-3 shrink-0" />
+                                <span className="truncate">{photo.subfolderName}</span>
+                              </span>
+                            )}
+                            {photo.location && (
+                              <span className="flex items-center gap-0.5 truncate max-w-[90px]">
+                                <MapPin className="w-3 h-3" /> {photo.location}
+                              </span>
+                            )}
+                            <button
+                              onClick={() => deletePhoto(photo.id)}
+                              className="p-1 text-zinc-300 hover:text-red-500 transition cursor-pointer"
+                              title="Xóa ảnh này"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+
+              {/* Infinite Scroll Sentinel & Load More Buttons */}
+              <div ref={sentinelRef} className="py-6 flex flex-col items-center justify-center gap-3">
+                {visiblePhotoCount < currentViewPhotos.length ? (
+                  <div className="flex flex-wrap items-center justify-center gap-3">
+                    <button
+                      onClick={() => {
+                        soundService.playPop();
+                        setVisiblePhotoCount((prev) => Math.min(prev + PHOTOS_PAGE_SIZE, currentViewPhotos.length));
+                      }}
+                      className="px-6 py-2.5 rounded-full bg-rose-500 hover:bg-rose-600 text-white text-xs sm:text-sm font-bold shadow-md shadow-rose-200 dark:shadow-rose-950 transition active:scale-95 flex items-center gap-2 cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>
+                        Tải thêm {Math.min(PHOTOS_PAGE_SIZE, currentViewPhotos.length - visiblePhotoCount)} ảnh (
+                        {visiblePhotoCount}/{currentViewPhotos.length})
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        soundService.playPop();
+                        setVisiblePhotoCount(currentViewPhotos.length);
+                      }}
+                      className="px-4 py-2.5 rounded-full bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 text-xs font-bold transition cursor-pointer"
+                    >
+                      Hiện tất cả ({currentViewPhotos.length} ảnh)
+                    </button>
+                  </div>
+                ) : currentViewPhotos.length > PHOTOS_PAGE_SIZE ? (
+                  <div className="text-center py-4 text-xs font-bold text-zinc-400 flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-rose-400" />
+                    <span>Đã tải toàn bộ {currentViewPhotos.length} bức ảnh kỷ niệm</span>
+                  </div>
+                ) : null}
+              </div>
+            </>
           )}
         </div>
       )}
