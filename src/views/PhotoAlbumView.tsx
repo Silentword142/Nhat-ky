@@ -300,7 +300,11 @@ export const PhotoAlbumView: React.FC = () => {
     if (activeAlbumId && activeAlbumId !== 'all') {
       const albumName = currentAlbumObj?.name || activeAlbumId;
       result = photos.filter(
-        (p) => p.albumName === albumName || p.albumId === activeAlbumId || p.albumName === activeAlbumId
+        (p) =>
+          p.albumName === albumName ||
+          p.albumId === activeAlbumId ||
+          p.albumName === activeAlbumId ||
+          (currentAlbumObj?.driveFolderId && p.driveFolderId === currentAlbumObj.driveFolderId)
       );
     }
     if (activeSubfolder) {
@@ -867,8 +871,13 @@ export const PhotoAlbumView: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-7">
             {albumsList.map((album) => {
               const albumPhotos = photos.filter(
-                (p) => p.albumName === album.name || p.albumId === album.id || p.albumName === album.id
+                (p) =>
+                  p.albumName === album.name ||
+                  p.albumId === album.id ||
+                  p.albumName === album.id ||
+                  (album.driveFolderId && p.driveFolderId === album.driveFolderId)
               );
+              const totalCount = Math.max(albumPhotos.length, album.photoCount || 0);
               const coverImg =
                 albumPhotos[0]?.imageUrl ||
                 album.coverImage ||
@@ -941,7 +950,7 @@ export const PhotoAlbumView: React.FC = () => {
                     {/* Count badge over image */}
                     <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white pointer-events-none">
                       <span className="px-3 py-1 rounded-full bg-black/40 backdrop-blur-md text-xs font-bold border border-white/20">
-                        📷 {albumPhotos.length} bức ảnh
+                        📷 {totalCount} bức ảnh
                       </span>
                       {album.subfolders && album.subfolders.length > 0 && (
                         <span className="px-2.5 py-0.5 rounded-full bg-rose-500/80 backdrop-blur-md text-[11px] font-bold">

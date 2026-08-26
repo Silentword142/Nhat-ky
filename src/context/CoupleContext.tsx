@@ -1655,21 +1655,21 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   );
 
   const addPhotosBatch = useCallback(
-    (photosList: Array<Omit<PhotoMemory, 'id' | 'createdAt' | 'authorId' | 'authorName' | 'likes'>>) => {
+    (photosList: Array<Partial<PhotoMemory>>) => {
       if (!Array.isArray(photosList) || photosList.length === 0) return;
       hasUserMutatedRef.current = true;
       const nowTime = Date.now();
       const createdPhotos: PhotoMemory[] = photosList.map((p, idx) => ({
-        ...p,
-        id: `photo_${nowTime}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
-        authorId: myUserId,
-        authorName: myProfile.name,
-        likes: [],
-        createdAt: nowTime + idx,
+        ...(p as PhotoMemory),
+        id: (p as any).id || `photo_${nowTime}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+        authorId: (p as any).authorId || myUserId,
+        authorName: (p as any).authorName || myProfile.name,
+        likes: (p as any).likes || [],
+        createdAt: (p as any).createdAt || (nowTime + idx),
       }));
 
       setPhotos((prev) => {
-        const next = [...createdPhotos, ...prev.filter((p) => !createdPhotos.some((cp) => cp.id === p.id))];
+        const next = [...createdPhotos, ...prev.filter((p) => !createdPhotos.some((cp) => (cp.originalFileId && cp.originalFileId === p.originalFileId) || cp.id === p.id))];
         try {
           localStorage.setItem(`${STORAGE_KEY_PREFIX}photos`, JSON.stringify(next));
         } catch {}

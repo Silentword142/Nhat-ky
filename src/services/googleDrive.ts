@@ -532,32 +532,70 @@ export async function scanGoogleDriveFoldersAndPhotos(
     const authorId = currentUserId || 'user_drive';
     const authorName = currentUserName || 'Google Drive';
 
-    // Helper: Query subfolders of a given parent folder
+    // Helper: Query subfolders of a given parent folder with full pagination
     async function getSubfoldersOf(parentId: string): Promise<Array<{ id: string; name: string; webViewLink?: string; createdTime?: string; modifiedTime?: string }>> {
+      const allFolders: Array<{ id: string; name: string; webViewLink?: string; createdTime?: string; modifiedTime?: string }> = [];
+      let pageToken: string | undefined = undefined;
       const q = `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
-      const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id, name, webViewLink, createdTime, modifiedTime)&orderBy=name&spaces=drive`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-      if (!res.ok) return [];
-      const data = await res.json();
-      return data.files || [];
+      const fields = 'nextPageToken, files(id, name, webViewLink, createdTime, modifiedTime)';
+
+      do {
+        let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&orderBy=name&pageSize=1000&spaces=drive`;
+        if (pageToken) {
+          url += `&pageToken=${encodeURIComponent(pageToken)}`;
+        }
+        try {
+          const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+          if (!res.ok) break;
+          const data = await res.json();
+          if (data.files && Array.isArray(data.files)) {
+            allFolders.push(...data.files);
+          }
+          pageToken = data.nextPageToken;
+        } catch (err) {
+          console.warn(`Error fetching subfolders for ${parentId}:`, err);
+          break;
+        }
+      } while (pageToken);
+
+      return allFolders;
     }
 
-    // Helper: Query image files of a given parent folder
+    // Helper: Query image files of a given parent folder with full pagination (handles 2000+ photos)
     async function getImagesOf(
       parentId: string,
       albumId: string,
       albumName: string,
       subfolderName?: string
     ): Promise<PhotoMemory[]> {
+      const allFiles: any[] = [];
+      let pageToken: string | undefined = undefined;
       const q = `'${parentId}' in parents and mimeType contains 'image/' and trashed = false`;
-      const fields = 'files(id, name, mimeType, size, webViewLink, webContentLink, thumbnailLink, createdTime, modifiedTime, imageMediaMetadata)';
-      const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&orderBy=createdTime desc&spaces=drive`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-      if (!res.ok) return [];
-      const data = await res.json();
-      const files = data.files || [];
+      const fields = 'nextPageToken, files(id, name, mimeType, size, webViewLink, webContentLink, thumbnailLink, createdTime, modifiedTime, imageMediaMetadata)';
 
-      return files.map((file: any) => {
+      do {
+        let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&orderBy=createdTime desc&pageSize=1000&spaces=drive`;
+        if (pageToken) {
+          url += `&pageToken=${encodeURIComponent(pageToken)}`;
+        }
+        try {
+          const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+          if (!res.ok) {
+            console.warn(`Fetch images failed for folder ${parentId}:`, res.statusText);
+            break;
+          }
+          const data = await res.json();
+          if (data.files && Array.isArray(data.files)) {
+            allFiles.push(...data.files);
+          }
+          pageToken = data.nextPageToken;
+        } catch (err) {
+          console.warn(`Error fetching page of images for ${parentId}:`, err);
+          break;
+        }
+      } while (pageToken);
+
+      return allFiles.map((file: any) => {
         const createdMs = file.createdTime ? new Date(file.createdTime).getTime() : Date.now();
         const dateStr = file.createdTime ? file.createdTime.split('T')[0] : new Date().toISOString().split('T')[0];
         const directUrl = `https://drive.google.com/thumbnail?id=${file.id}&sz=w2560`;
@@ -645,12 +683,14 @@ export async function scanGoogleDriveFoldersAndPhotos(
       allCollectedPhotos.push(...folderAllPhotos);
     }
 
-    // 3. Also check if there are any loose photos placed directly in the Photos root folder
-    const rootLoosePhotos = await getImagesOf(photosFolderId, 'root_photos', 'Ảnh Chưa Phân Loại');
+    // 3. Also check if there are any loose photos placed directly in the Photos root / custom folder
+    const customFolder = getCustomPhotosFolder();
+    const rootDisplayName = customFolder?.name || 'Ảnh Chung Trên Drive';
+    const rootLoosePhotos = await getImagesOf(photosFolderId, 'root_photos', rootDisplayName);
     if (rootLoosePhotos.length > 0) {
       scannedFolders.push({
         id: 'root_photos',
-        name: 'Ảnh Chung Trên Drive',
+        name: rootDisplayName,
         driveFolderId: photosFolderId,
         driveFolderUrl: photosFolderUrl,
         photos: rootLoosePhotos,
