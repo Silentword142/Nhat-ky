@@ -38,7 +38,14 @@ import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { compressImageFile, CUTE_AVATARS } from '../utils/image';
 import { DEFAULT_AVATAR_ME, DEFAULT_AVATAR_PARTNER } from '../services/mockData';
-import { getOAuthClientId, setCustomOAuthClientId, DEFAULT_PROD_CLIENT_ID } from '../services/googleAuth';
+import { getOAuthClientId, setCustomOAuthClientId, DEFAULT_PROD_CLIENT_ID, getAccessToken, googleSignIn } from '../services/googleAuth';
+import {
+  getCustomPhotosFolder,
+  setCustomPhotosFolder,
+  clearCustomPhotosFolder,
+  extractDriveFolderId,
+  getFolderDetails,
+} from '../services/googleDrive';
 import { AvatarCropModal } from '../components/AvatarCropModal';
 import { PartnerProfileModal } from '../components/PartnerProfileModal';
 import { DateInputVN } from '../components/DateInputVN';
@@ -168,6 +175,85 @@ export const SettingsView: React.FC = () => {
   const [customClientIdInput, setCustomClientIdInput] = useState(getOAuthClientId());
   const [isSavedClientId, setIsSavedClientId] = useState(false);
   const [showOAuthSettings, setShowOAuthSettings] = useState(false);
+
+  // Custom Google Drive Photos Folder Setting in SettingsView
+  const [customPhotosFolderInput, setCustomPhotosFolderInput] = useState(() => {
+    const cf = getCustomPhotosFolder();
+    return cf?.url || cf?.id || '';
+  });
+  const [customPhotosFolderName, setCustomPhotosFolderName] = useState(() => {
+    const cf = getCustomPhotosFolder();
+    return cf?.name || '';
+  });
+  const [isVerifyingDriveFolder, setIsVerifyingDriveFolder] = useState(false);
+  const [showDriveFolderSettings, setShowDriveFolderSettings] = useState(false);
+  const [customFolderSaveNotice, setCustomFolderSaveNotice] = useState<string | null>(null);
+  const [customFolderErrorNotice, setCustomFolderErrorNotice] = useState<string | null>(null);
+  const [activePhotosFolder, setActivePhotosFolder] = useState(() => getCustomPhotosFolder());
+
+  const handleSavePhotosFolderSetting = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const input = customPhotosFolderInput.trim();
+    if (!input) {
+      clearCustomPhotosFolder();
+      setActivePhotosFolder(null);
+      setCustomFolderErrorNotice(null);
+      setCustomFolderSaveNotice('✓ Đã đặt lại về thư mục Album Ảnh mặc định của LoveSync!');
+      soundService.playSparkle();
+      setTimeout(() => setCustomFolderSaveNotice(null), 4000);
+      return;
+    }
+
+    const folderId = extractDriveFolderId(input);
+    if (!folderId) {
+      setCustomFolderErrorNotice('Đường dẫn không hợp lệ. Vui lòng dán link Google Drive hoặc Folder ID.');
+      return;
+    }
+
+    try {
+      setIsVerifyingDriveFolder(true);
+      setCustomFolderErrorNotice(null);
+      setCustomFolderSaveNotice(null);
+
+      let token = await getAccessToken();
+      if (!token) {
+        const res = await googleSignIn();
+        token = res?.accessToken || null;
+      }
+      if (!token) {
+        setCustomFolderErrorNotice('Chưa kết nối Google Drive. Vui lòng kết nối Google Drive trước.');
+        return;
+      }
+
+      const details = await getFolderDetails(token, folderId);
+      if (!details) {
+        setCustomFolderErrorNotice('Không tìm thấy thư mục hoặc chưa cấp quyền truy cập thư mục này. Vui lòng kiểm tra quyền trên Google Drive.');
+        return;
+      }
+
+      const finalName = customPhotosFolderName.trim() || details.name;
+      const saved = setCustomPhotosFolder(details.id, finalName);
+      setActivePhotosFolder(saved);
+      soundService.playSparkle();
+      setCustomFolderSaveNotice(`✓ Đã đổi đường dẫn lưu ảnh sang thư mục "${finalName}"!`);
+      setTimeout(() => setCustomFolderSaveNotice(null), 4000);
+    } catch (err: any) {
+      setCustomFolderErrorNotice(err.message || 'Lỗi kiểm tra thư mục Google Drive.');
+    } finally {
+      setIsVerifyingDriveFolder(false);
+    }
+  };
+
+  const handleResetPhotosFolderSetting = () => {
+    clearCustomPhotosFolder();
+    setActivePhotosFolder(null);
+    setCustomPhotosFolderInput('');
+    setCustomPhotosFolderName('');
+    setCustomFolderErrorNotice(null);
+    setCustomFolderSaveNotice('✓ Đã khôi phục về thư mục Album Ảnh mặc định của LoveSync!');
+    soundService.playPop();
+    setTimeout(() => setCustomFolderSaveNotice(null), 4000);
+  };
 
   const handleSaveCustomClientId = (e: React.FormEvent) => {
     e.preventDefault();
@@ -798,30 +884,80 @@ export const SettingsView: React.FC = () => {
             <button
               type="button"
               onClick={() => setShowOAuthSettings(!showOAuthSettings)}
-              className="text-[11px] text-blue-600 hover:text-blue-700 dark:text-blue-400 font-semibold font-cute flex items-center gap-1.5 cursor-pointer"
+              className="text-[11px] text-blue-600 hover:text-blue-700 dark:text-blue-400 font-semibold font-cute flex items-center justify-between w-full p-2 rounded-xl hover:bg-blue-50 dark:hover:bg-zinc-800/60 transition cursor-pointer"
             >
-              <span>⚙️ Cấu hình Google OAuth Client ID (Dành cho trang web riêng / Render / Tên miền tùy chỉnh)</span>
-              <span>{showOAuthSettings ? '▲' : '▼'}</span>
+              <span className="flex items-center gap-1.5">
+                <span>⚙️</span>
+                <span>Cấu hình Google OAuth Client ID (Dành cho Render / Web riêng / Tên miền tùy chỉnh)</span>
+              </span>
+              <span className="text-xs">{showOAuthSettings ? '▲ Thu gọn' : '▼ Mở rộng'}</span>
             </button>
 
             {showOAuthSettings && (
-              <form onSubmit={handleSaveCustomClientId} className="mt-3 p-3.5 rounded-2xl bg-white/90 dark:bg-zinc-800/90 border border-blue-200 dark:border-zinc-700 space-y-2.5 text-xs">
+              <form onSubmit={handleSaveCustomClientId} className="mt-3 p-4 rounded-2xl bg-white/95 dark:bg-zinc-800/95 border border-blue-200 dark:border-zinc-700 space-y-3.5 text-xs shadow-xs">
+                {/* Current Origin Notice */}
+                <div className="p-3 rounded-xl bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-800/60 space-y-1.5">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <span className="text-[11px] font-bold text-blue-900 dark:text-blue-200 flex items-center gap-1 font-cute">
+                      <span>🌐 Tên miền Web hiện tại (Origin):</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundService.playSparkle();
+                        navigator.clipboard.writeText(typeof window !== 'undefined' ? window.location.origin : '');
+                        setDriveActionNotice('Đã sao chép tên miền vào bộ nhớ tạm!');
+                        setTimeout(() => setDriveActionNotice(null), 3000);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold shadow-xs transition active:scale-95 cursor-pointer flex items-center gap-1"
+                    >
+                      <Copy className="w-3 h-3" />
+                      <span>Sao chép tên miền</span>
+                    </button>
+                  </div>
+                  <code className="block px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-blue-200 dark:border-zinc-700 font-mono text-[11px] text-blue-700 dark:text-blue-300 font-bold select-all break-all">
+                    {typeof window !== 'undefined' ? window.location.origin : 'https://moonandcloud-3.onrender.com'}
+                  </code>
+                </div>
+
                 <div>
                   <label className="block text-[11px] font-bold text-zinc-700 dark:text-zinc-300 font-cute mb-1">
-                    Google OAuth Client ID đang kích hoạt:
+                    Google OAuth 2.0 Client ID:
                   </label>
                   <input
                     type="text"
                     value={customClientIdInput}
                     onChange={(e) => setCustomClientIdInput(e.target.value)}
-                    placeholder="xxxx.apps.googleusercontent.com"
+                    placeholder="xxxx-xxxxxxxx.apps.googleusercontent.com"
                     className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 focus:outline-hidden focus:ring-2 focus:ring-blue-400"
                   />
                 </div>
+
+                {/* Step by step instructions for fix origin_mismatch */}
+                <div className="p-3 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 space-y-1.5 font-cute leading-relaxed">
+                  <div className="font-bold flex items-center gap-1 text-amber-800 dark:text-amber-300">
+                    <span>🛠️ Hướng dẫn sửa "Lỗi 400: origin_mismatch":</span>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 pl-1">
+                    <li>
+                      Mở <strong>Google Cloud Console</strong> &rarr; Vào <strong>APIs & Services &rarr; Credentials</strong>.
+                    </li>
+                    <li>
+                      Bấm vào <strong>OAuth 2.0 Client ID</strong> bạn đang dùng (hoặc tạo mới loại <em>Web application</em>).
+                    </li>
+                    <li>
+                      Tại mục <strong>Authorized JavaScript origins</strong> (Nguồn gốc JavaScript được uỷ quyền), bấm <strong>+ ADD URI</strong> và dán: <code className="px-1 py-0.5 rounded bg-white dark:bg-zinc-800 font-mono text-[10px] text-blue-600 dark:text-blue-400 font-bold select-all">{typeof window !== 'undefined' ? window.location.origin : 'https://moonandcloud-3.onrender.com'}</code>
+                    </li>
+                    <li>
+                      Bấm <strong>SAVE (Lưu)</strong> và dán Client ID vào ô bên trên rồi bấm <strong>Lưu Client ID</strong>.
+                    </li>
+                  </ol>
+                </div>
+
                 <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
-                  <p className="text-[10px] text-zinc-500 dark:text-zinc-400 font-cute">
-                    💡 Đảm bảo tên miền của bạn (ví dụ: <code className="text-blue-600 font-mono">https://moonandcloud-3.onrender.com</code>) đã được thêm vào mục <strong>Authorized JavaScript origins</strong> của Client ID này trên Google Cloud.
-                  </p>
+                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-cute">
+                    💡 Bạn cũng có thể thiết lập biến <code className="font-mono text-blue-600">VITE_GOOGLE_CLIENT_ID</code> trên Render.
+                  </span>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -838,6 +974,137 @@ export const SettingsView: React.FC = () => {
                       <span>{isSavedClientId ? 'Đã Lưu!' : 'Lưu Client ID'}</span>
                     </button>
                   </div>
+                </div>
+              </form>
+            )}
+          </div>
+
+          {/* Custom Google Drive Photos Folder Setting */}
+          <div className="mt-3 pt-3 border-t border-blue-100/80 dark:border-zinc-800">
+            <button
+              type="button"
+              onClick={() => setShowDriveFolderSettings(!showDriveFolderSettings)}
+              className="text-[11px] text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 font-semibold font-cute flex items-center justify-between w-full p-2 rounded-xl hover:bg-indigo-50 dark:hover:bg-zinc-800/60 transition cursor-pointer"
+            >
+              <span className="flex items-center gap-1.5">
+                <span>📁</span>
+                <span>Đổi Đường Dẫn / Link Thư Mục Lưu Ảnh Google Drive (Tùy Chỉnh Thư Mục)</span>
+              </span>
+              <span className="text-xs">{showDriveFolderSettings ? '▲ Thu gọn' : '▼ Mở rộng'}</span>
+            </button>
+
+            {showDriveFolderSettings && (
+              <form onSubmit={handleSavePhotosFolderSetting} className="mt-3 p-4 rounded-2xl bg-white/95 dark:bg-zinc-800/95 border border-indigo-200 dark:border-zinc-700 space-y-3.5 text-xs shadow-xs">
+                {/* Active Folder Status */}
+                <div className="p-3 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800/60 space-y-1.5">
+                  <span className="text-[11px] font-bold text-indigo-900 dark:text-indigo-200 block font-cute">
+                    📂 Thư mục ảnh hiện tại:
+                  </span>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="text-xs font-bold text-zinc-800 dark:text-zinc-200 break-all">
+                      {activePhotosFolder?.name || '📷 Album Ảnh & Kỷ Niệm (Mặc định trong LoveSync)'}
+                    </div>
+                    {activePhotosFolder?.url && (
+                      <a
+                        href={activePhotosFolder.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[10px] font-bold hover:bg-indigo-700 transition flex items-center gap-1 shrink-0"
+                      >
+                        <span>Mở Drive</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
+                  {activePhotosFolder?.id && (
+                    <div className="text-[10px] text-zinc-500 dark:text-zinc-400 font-mono">
+                      Folder ID: {activePhotosFolder.id}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-zinc-700 dark:text-zinc-300 font-cute mb-1">
+                    🔗 Dán đường link thư mục Google Drive mới hoặc Folder ID:
+                  </label>
+                  <input
+                    type="text"
+                    value={customPhotosFolderInput}
+                    onChange={(e) => {
+                      setCustomPhotosFolderInput(e.target.value);
+                      setCustomFolderErrorNotice(null);
+                      setCustomFolderSaveNotice(null);
+                    }}
+                    placeholder="https://drive.google.com/drive/folders/1aBcDeFgHiJkLmNoP... hoặc 1aBcDe..."
+                    className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-400"
+                  />
+                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1 block">
+                    💡 Bạn có thể dán toàn bộ đường link thư mục (URL trên trình duyệt khi mở thư mục Drive) hoặc dán Folder ID.
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-zinc-700 dark:text-zinc-300 font-cute mb-1">
+                    🏷️ Đặt tên hiển thị cho thư mục (tùy chọn):
+                  </label>
+                  <input
+                    type="text"
+                    value={customPhotosFolderName}
+                    onChange={(e) => setCustomPhotosFolderName(e.target.value)}
+                    placeholder="Ví dụ: Kho Ảnh Kỷ Niệm 2026"
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-400 font-cute"
+                  />
+                </div>
+
+                {customFolderErrorNotice && (
+                  <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>{customFolderErrorNotice}</span>
+                  </div>
+                )}
+
+                {customFolderSaveNotice && (
+                  <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>{customFolderSaveNotice}</span>
+                  </div>
+                )}
+
+                {/* Instructions */}
+                <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 space-y-1 font-cute">
+                  <span className="font-bold block">💡 Hướng dẫn lấy link thư mục Google Drive:</span>
+                  <ol className="list-decimal list-inside space-y-0.5 pl-1">
+                    <li>Vào Google Drive trên web hoặc app.</li>
+                    <li>Mở thư mục bạn muốn lưu ảnh ➔ Sao chép link trên thanh địa chỉ hoặc bấm Chia sẻ ➔ Sao chép liên kết.</li>
+                    <li>Dán vào ô bên trên và bấm <strong>Kiểm Tra & Lưu Thư Mục</strong>.</li>
+                  </ol>
+                </div>
+
+                <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleResetPhotosFolderSetting}
+                    className="px-3 py-1.5 text-[11px] text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-xl transition cursor-pointer"
+                  >
+                    Khôi phục mặc định
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isVerifyingDriveFolder}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition active:scale-95 cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    {isVerifyingDriveFolder ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Đang kiểm tra...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Kiểm Tra & Lưu Thư Mục</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               </form>
             )}

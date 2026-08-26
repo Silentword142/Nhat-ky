@@ -10,6 +10,107 @@ export const APP_FOLDER_NAME = '📁 LoveSync - Nhật Ký & Kỷ Niệm Tình Y
 export const PHOTOS_ROOT_FOLDER_NAME = '📷 Album Ảnh & Kỷ Niệm (Photos)';
 export const MASTER_ACCOUNTS_FILE_NAME = 'lovesync_accounts_vault.json';
 
+export const CUSTOM_PHOTOS_FOLDER_ID_KEY = 'LOVESYNC_CUSTOM_PHOTOS_FOLDER_ID';
+export const CUSTOM_PHOTOS_FOLDER_NAME_KEY = 'LOVESYNC_CUSTOM_PHOTOS_FOLDER_NAME';
+export const CUSTOM_PHOTOS_FOLDER_URL_KEY = 'LOVESYNC_CUSTOM_PHOTOS_FOLDER_URL';
+
+/**
+ * Extracts Google Drive Folder ID from a full Drive URL or a raw ID string
+ * Supports:
+ * - https://drive.google.com/drive/folders/1ABCxyz...
+ * - https://drive.google.com/drive/u/0/folders/1ABCxyz...
+ * - https://drive.google.com/open?id=1ABCxyz...
+ * - Raw ID string
+ */
+export function extractDriveFolderId(input: string): string {
+  if (!input) return '';
+  const trimmed = input.trim();
+
+  // Match /folders/ID
+  const foldersMatch = trimmed.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (foldersMatch && foldersMatch[1]) {
+    return foldersMatch[1];
+  }
+
+  // Match id=ID
+  const idMatch = trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (idMatch && idMatch[1]) {
+    return idMatch[1];
+  }
+
+  // If already pure ID string (Google Drive IDs are usually 25-45 characters long)
+  const cleanId = trimmed.replace(/[^a-zA-Z0-9_-]/g, '');
+  return cleanId;
+}
+
+/**
+ * Get custom photos folder stored in local storage
+ */
+export function getCustomPhotosFolder(): { id: string; name?: string; url: string } | null {
+  if (typeof window === 'undefined') return null;
+  const id = localStorage.getItem(CUSTOM_PHOTOS_FOLDER_ID_KEY)?.trim();
+  if (!id) return null;
+  const name = localStorage.getItem(CUSTOM_PHOTOS_FOLDER_NAME_KEY)?.trim() || undefined;
+  const url = localStorage.getItem(CUSTOM_PHOTOS_FOLDER_URL_KEY)?.trim() || `https://drive.google.com/drive/folders/${id}`;
+  return { id, name, url };
+}
+
+/**
+ * Set custom photos folder to point photo uploads & scans to a user-chosen folder
+ */
+export function setCustomPhotosFolder(idOrUrl: string, name?: string): { id: string; name?: string; url: string } | null {
+  if (typeof window === 'undefined') return null;
+  const folderId = extractDriveFolderId(idOrUrl);
+  if (!folderId) {
+    clearCustomPhotosFolder();
+    return null;
+  }
+  const url = `https://drive.google.com/drive/folders/${folderId}`;
+  localStorage.setItem(CUSTOM_PHOTOS_FOLDER_ID_KEY, folderId);
+  localStorage.setItem(CUSTOM_PHOTOS_FOLDER_URL_KEY, url);
+  if (name) {
+    localStorage.setItem(CUSTOM_PHOTOS_FOLDER_NAME_KEY, name.trim());
+  }
+  return { id: folderId, name: name?.trim(), url };
+}
+
+/**
+ * Clear custom photos folder (revert to default LoveSync folder)
+ */
+export function clearCustomPhotosFolder(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(CUSTOM_PHOTOS_FOLDER_ID_KEY);
+  localStorage.removeItem(CUSTOM_PHOTOS_FOLDER_NAME_KEY);
+  localStorage.removeItem(CUSTOM_PHOTOS_FOLDER_URL_KEY);
+}
+
+/**
+ * Query Drive folder details (Name, link, trashed status) to verify folder existence & permissions
+ */
+export async function getFolderDetails(
+  accessToken: string,
+  folderId: string
+): Promise<{ id: string; name: string; webViewLink?: string } | null> {
+  try {
+    const cleanId = extractDriveFolderId(folderId);
+    if (!cleanId) return null;
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${cleanId}?fields=id,name,mimeType,webViewLink,trashed`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.trashed || data.mimeType !== 'application/vnd.google-apps.folder') return null;
+    return {
+      id: data.id,
+      name: data.name,
+      webViewLink: data.webViewLink || `https://drive.google.com/drive/folders/${data.id}`,
+    };
+  } catch (err) {
+    console.warn('getFolderDetails error:', err);
+    return null;
+  }
+}
+
 export interface DriveBackupInfo {
   id: string;
   name: string;
@@ -100,6 +201,15 @@ export async function findOrCreateAppFolder(accessToken: string): Promise<string
  * Find or create the Photos root folder inside LoveSync app directory
  */
 export async function findOrCreatePhotosFolder(accessToken: string, appFolderId?: string): Promise<string> {
+  // Check if a custom photos folder has been set by the user
+  const custom = getCustomPhotosFolder();
+  if (custom && custom.id) {
+    const verified = await getFolderDetails(accessToken, custom.id);
+    if (verified && verified.id) {
+      return verified.id;
+    }
+  }
+
   const parentId = appFolderId || (await findOrCreateAppFolder(accessToken));
   const query = `name = '${PHOTOS_ROOT_FOLDER_NAME}' and '${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id, name)&spaces=drive`;
