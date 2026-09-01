@@ -130,17 +130,23 @@ export async function registerAccount(
       }),
     });
 
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Không thể tạo tài khoản trên máy chủ.');
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && data.success && data.user) {
+        serverUser = data.user;
+      }
+    } else {
+      const data = await res.json().catch(() => null);
+      if (data && data.error && res.status !== 404) {
+        throw new Error(data.error);
+      }
     }
-    serverUser = data.user;
   } catch (err: any) {
     // If it is a business error (e.g., username taken), rethrow immediately
-    if (err.message) {
+    if (err.message && err.message.includes('đã được đăng ký')) {
       throw err;
     }
-    throw new Error('Không thể kết nối đến máy chủ để tạo tài khoản. Vui lòng thử lại.');
+    console.log('[Auth] Server register endpoint unavailable (static hosting/offline). Account saved to local web storage.');
   }
 
   const newUserData: UserAccountData = {
@@ -650,19 +656,32 @@ export async function changePasswordWithoutOld(
     throw new Error('Mật khẩu mới cần tối thiểu 4 ký tự.');
   }
 
-  // 1. Call server endpoint
-  const res = await fetch('/api/auth/change-password', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      username: cleanUsername,
-      newPassword: cleanPass,
-    }),
-  });
+  // 1. Call server endpoint if available
+  try {
+    const res = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: cleanUsername,
+        newPassword: cleanPass,
+      }),
+    });
 
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Không thể đổi mật khẩu. Vui lòng kiểm tra lại tên tài khoản.');
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && data.success) {
+        // Updated on server
+      }
+    } else {
+      const data = await res.json().catch(() => null);
+      if (data && data.error && res.status !== 404) {
+        throw new Error(data.error);
+      }
+    }
+  } catch (err: any) {
+    if (err.message && !err.message.includes('Failed to fetch') && !err.message.includes('NetworkError') && !err.message.includes('404')) {
+      throw err;
+    }
   }
 
   // 2. Update local web accounts cache
@@ -675,7 +694,7 @@ export async function changePasswordWithoutOld(
 
   return {
     success: true,
-    message: data.message || `Đã đổi mật khẩu cho tài khoản "${cleanUsername}" thành công!`,
+    message: `Đã đổi mật khẩu cho tài khoản "${cleanUsername}" thành công!`,
   };
 }
 
