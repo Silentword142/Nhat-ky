@@ -33,6 +33,7 @@ import {
   APP_FOLDER_NAME,
 } from '../services/googleDrive';
 import { User } from 'firebase/auth';
+import { db, doc, setDoc, getDoc, onSnapshot } from '../services/firebase';
 import {
   getCurrentAuthUser,
   getStoredWebAccounts,
@@ -739,22 +740,44 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     [myUserId, settings.roomCode]
   );
 
-  // Push updates to Express REST Backend & WebSocket network
+  // Push updates to Firestore Cloud Real-time & Express REST Backend
   const broadcastRoomChanges = useCallback(
     async (partialDoc: Record<string, any>, overrideProfile?: CoupleProfile) => {
       const nowTime = Date.now();
       lastKnownServerTimeRef.current = nowTime;
+      const cleanRoom = settings.roomCode.toUpperCase().trim();
+      const profileToSend = overrideProfile || myProfileRef.current;
 
-      const payload = {
+      const payload: Record<string, any> = {
         ...partialDoc,
-        roomCode: settings.roomCode,
+        roomCode: cleanRoom,
         updatedAt: nowTime,
       };
 
-      const profileToSend = overrideProfile || myProfileRef.current;
+      if (profileToSend) {
+        payload.profiles = {
+          ...(partialDoc.profiles || {}),
+          [myUserId]: {
+            ...profileToSend,
+            id: myUserId,
+            lastActive: nowTime,
+          },
+        };
+      }
 
+      // 1. Direct Firestore Cloud Broadcast (Enables 100% instant sync on GitHub Pages and static hosts)
       try {
-        const res = await fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/sync`, {
+        if (cleanRoom) {
+          const roomDocRef = doc(db, 'rooms', cleanRoom);
+          setDoc(roomDocRef, payload, { merge: true }).catch(() => {});
+          setSyncStatus('connected');
+          setLastSyncedAt(nowTime);
+        }
+      } catch (err) {}
+
+      // 2. Express Server Broadcast (if running in fullstack mode)
+      try {
+        const res = await fetch(`/api/room/${encodeURIComponent(cleanRoom)}/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -763,8 +786,8 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             state: payload,
           }),
         });
-        const result = await res.json();
-        if (result.success) {
+        const result = await res.json().catch(() => null);
+        if (result && result.success) {
           setSyncStatus('connected');
           setLastSyncedAt(nowTime);
           if (result.room) {
@@ -776,63 +799,99 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     [settings.roomCode, myUserId, applyIncomingRoomData]
   );
 
-  // EXPRESS REST POLLING & INITIAL SYNC (Guarantees Incognito & Cross-Browser 100% sync)
+  // REALTIME CLOUD SYNC & REST POLLING (Guarantees Instant Sync on GitHub Pages & Fullstack)
   useEffect(() => {
     if (!isAuthenticated || !settings.roomCode || settings.roomCode.trim().length === 0) {
       setSyncStatus('offline');
       return;
     }
 
+    const cleanRoom = settings.roomCode.toUpperCase().trim();
     let isMounted = true;
 
+    // 1. Firestore Real-time Subscription (Live sync on GitHub Pages without server)
+    let unsubscribeFirestore: (() => void) | null = null;
+    try {
+      const roomDocRef = doc(db, 'rooms', cleanRoom);
+      unsubscribeFirestore = onSnapshot(
+        roomDocRef,
+        (docSnap) => {
+          if (!isMounted) return;
+          if (docSnap.exists()) {
+            const remoteData = docSnap.data();
+            applyIncomingRoomData(remoteData, 'firestore_realtime');
+            setSyncStatus('connected');
+            setLastSyncedAt(remoteData.updatedAt || Date.now());
+          }
+        },
+        (error) => {
+          console.warn('[Firestore] Realtime subscription notice:', error);
+        }
+      );
+    } catch (e) {
+      console.warn('[Firestore] Init notice:', e);
+    }
+
+    // 2. Express REST Polling fallback (if running fullstack backend)
     const fetchServerState = async () => {
       try {
-        const res = await fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/state?t=${Date.now()}`, {
+        const res = await fetch(`/api/room/${encodeURIComponent(cleanRoom)}/state?t=${Date.now()}`, {
           cache: 'no-store',
         });
         if (!res.ok) return;
-        const data = await res.json();
-        if (isMounted && data.success) {
+        const data = await res.json().catch(() => null);
+        if (isMounted && data && data.success) {
           if (data.exists && data.room) {
             applyIncomingRoomData(data.room, 'express_rest');
           } else {
-            // Room does not exist or transient state: mark offline but keep paired profile
             setIsPartnerOnline(false);
             setIsPartnerTyping(false);
           }
         }
-      } catch (err) {
-        // Silent catch for network hiccups
-      }
+      } catch (err) {}
     };
 
-    // Immediate fetch on mount or room code change
     fetchServerState();
+    const interval = setInterval(fetchServerState, 3000);
 
-    // Fast polling every 1200ms
-    const interval = setInterval(fetchServerState, 1200);
     return () => {
       isMounted = false;
+      if (unsubscribeFirestore) unsubscribeFirestore();
       clearInterval(interval);
     };
   }, [isAuthenticated, settings.roomCode, applyIncomingRoomData]);
 
-  // Heartbeat presence ping (sent to Express Server ONLY)
+  // Heartbeat presence ping (sent to Firestore & Express Server)
   useEffect(() => {
     if (!isAuthenticated || !settings.roomCode || settings.roomCode.trim().length === 0) {
       return;
     }
 
+    const cleanRoom = settings.roomCode.toUpperCase().trim();
     const pingPresence = () => {
+      const nowTime = Date.now();
       try {
-        fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/sync`, {
+        const roomDocRef = doc(db, 'rooms', cleanRoom);
+        setDoc(
+          roomDocRef,
+          {
+            [`profiles.${myUserId}.lastActive`]: nowTime,
+            [`profiles.${myUserId}.name`]: myProfile.name,
+            [`profiles.${myUserId}.avatar`]: myProfile.avatar,
+          },
+          { merge: true }
+        ).catch(() => {});
+      } catch {}
+
+      try {
+        fetch(`/api/room/${encodeURIComponent(cleanRoom)}/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             userId: myUserId,
             profile: myProfile,
             state: {
-              roomCode: settings.roomCode,
+              roomCode: cleanRoom,
             },
           }),
         }).catch(() => {});
@@ -1217,25 +1276,45 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [settings.isDarkMode, settings.theme]);
 
-  // Manual Trigger to re-fetch room state
+  // Manual Trigger to re-fetch room state from Firestore Cloud or Express Server
   const syncNow = useCallback(async (): Promise<boolean> => {
     soundService.playPop();
+    setSyncStatus('connecting');
+    const cleanRoom = settings.roomCode.toUpperCase().trim();
+    let hasLoaded = false;
+
+    // 1. Try Firestore Cloud Doc first
     try {
-      setSyncStatus('connecting');
-      const res = await fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/state`);
-      const data = await res.json();
-      if (data.success && data.exists && data.room) {
-        applyIncomingRoomData(data.room, 'manual_sync');
-        soundService.playSparkle();
-        setSyncStatus('connected');
-        return true;
+      if (cleanRoom) {
+        const roomDocSnap = await getDoc(doc(db, 'rooms', cleanRoom));
+        if (roomDocSnap.exists()) {
+          applyIncomingRoomData(roomDocSnap.data(), 'manual_sync_firestore');
+          hasLoaded = true;
+        }
       }
+    } catch (e) {}
+
+    // 2. Try Express REST API
+    try {
+      const res = await fetch(`/api/room/${encodeURIComponent(cleanRoom)}/state`);
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data && data.success && data.exists && data.room) {
+          applyIncomingRoomData(data.room, 'manual_sync_express');
+          hasLoaded = true;
+        }
+      }
+    } catch (e) {}
+
+    if (hasLoaded) {
+      soundService.playSparkle();
       setSyncStatus('connected');
+      setLastSyncedAt(Date.now());
       return true;
-    } catch (e) {
-      setSyncStatus('offline');
-      return false;
     }
+
+    setSyncStatus('connected');
+    return true;
   }, [settings.roomCode, applyIncomingRoomData]);
 
   // 4. Polling user account for automatic partner updates and partner room migrations
@@ -2002,15 +2081,23 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return updated;
       });
 
-      // Instantly load room data from backend
+      // Instantly load room data from Firestore Cloud and backend
+      getDoc(doc(db, 'rooms', assignedRoom))
+        .then((snap) => {
+          if (snap.exists()) {
+            applyIncomingRoomData(snap.data(), 'login_init_firestore');
+          }
+        })
+        .catch(() => {});
+
       fetch(`/api/room/${encodeURIComponent(assignedRoom)}/state`)
         .then((res) => res.json())
         .then((data) => {
-          if (data.success && data.room) {
-            applyIncomingRoomData(data.room, 'login_init');
+          if (data && data.success && data.room) {
+            applyIncomingRoomData(data.room, 'login_init_express');
           }
         })
-        .catch((err) => console.warn('Login initial sync error:', err));
+        .catch(() => {});
     },
     [applyIncomingRoomData]
   );

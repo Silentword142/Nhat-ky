@@ -5,7 +5,7 @@ import {
   onAuthStateChanged,
   User,
 } from 'firebase/auth';
-import { auth } from './firebase';
+import { auth, db, doc, setDoc, getDoc } from './firebase';
 
 const googleProvider = new GoogleAuthProvider();
 
@@ -165,7 +165,23 @@ export async function registerAccount(
     createdAt: Date.now(),
   };
 
-  // 2. Save into browser cache for instant local retrieval
+  // 2. Save to Firestore cloud database for static host (GitHub Pages) cross-device sync
+  try {
+    const userDocRef = doc(db, 'users', cleanUsername);
+    setDoc(
+      userDocRef,
+      {
+        ...newUserData,
+        passwordHash: hashPassword(cleanPass),
+        updatedAt: Date.now(),
+      },
+      { merge: true }
+    ).catch(() => {});
+  } catch (e) {
+    console.warn('[Firestore Auth] Save user error:', e);
+  }
+
+  // 3. Save into browser cache for instant local retrieval
   const existingAccounts = getStoredWebAccounts();
   existingAccounts[cleanUsername] = {
     ...newUserData,
@@ -180,7 +196,7 @@ export async function registerAccount(
   return newUserData;
 }
 
-// 2. Login with Username & Password (AUTHENTICATES WITH SERVER ACROSS ALL DEVICES)
+// 2. Login with Username & Password (AUTHENTICATES WITH SERVER OR FIRESTORE ACROSS ALL DEVICES)
 export async function loginAccount(username: string, pass: string): Promise<UserAccountData> {
   const cleanUsername = username.trim().toLowerCase();
   const cleanPass = pass.trim();
@@ -191,7 +207,7 @@ export async function loginAccount(username: string, pass: string): Promise<User
 
   const webAccounts = getStoredWebAccounts();
 
-  // 1. Authenticate with Server API (Works across all devices & mobile)
+  // 1. Authenticate with Server API (Works when running on fullstack Node server)
   try {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
@@ -202,81 +218,134 @@ export async function loginAccount(username: string, pass: string): Promise<User
       }),
     });
 
-    const data = await res.json();
-    if (res.ok && data.success && data.user) {
-      const userData: UserAccountData = {
-        id: data.user.id || `usr_${cleanUsername}`,
-        username: data.user.username,
-        displayName: data.user.displayName,
-        photoURL: data.user.avatar || '',
-        avatar: data.user.avatar || '',
-        birthday: data.user.birthday,
-        gender: data.user.gender,
-        bio: data.user.bio,
-        loveQuote: data.user.loveQuote,
-        profile: data.user.profile,
-        roomCode: data.user.roomCode,
-        partnerUsername: data.user.partnerUsername,
-        partnerDisplayName: data.user.partnerDisplayName,
-        authProvider: 'username',
-        gdriveConnected: data.user.gdriveConnected,
-        gdriveEmail: data.user.gdriveEmail,
-        gdriveDisplayName: data.user.gdriveDisplayName,
-        gdriveFolderUrl: data.user.gdriveFolderUrl,
-        gdriveLastSaved: data.user.gdriveLastSaved,
-      };
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && data.success && data.user) {
+        const userData: UserAccountData = {
+          id: data.user.id || `usr_${cleanUsername}`,
+          username: data.user.username,
+          displayName: data.user.displayName,
+          photoURL: data.user.avatar || '',
+          avatar: data.user.avatar || '',
+          birthday: data.user.birthday,
+          gender: data.user.gender,
+          bio: data.user.bio,
+          loveQuote: data.user.loveQuote,
+          profile: data.user.profile,
+          roomCode: data.user.roomCode,
+          partnerUsername: data.user.partnerUsername,
+          partnerDisplayName: data.user.partnerDisplayName,
+          authProvider: 'username',
+          gdriveConnected: data.user.gdriveConnected,
+          gdriveEmail: data.user.gdriveEmail,
+          gdriveDisplayName: data.user.gdriveDisplayName,
+          gdriveFolderUrl: data.user.gdriveFolderUrl,
+          gdriveLastSaved: data.user.gdriveLastSaved,
+        };
 
-      // Save into local web storage cache
-      webAccounts[cleanUsername] = {
-        ...userData,
-        passwordHash: hashPassword(cleanPass),
-        updatedAt: Date.now(),
-      };
-      saveStoredWebAccounts(webAccounts);
+        // Save into local web storage cache
+        webAccounts[cleanUsername] = {
+          ...userData,
+          passwordHash: hashPassword(cleanPass),
+          updatedAt: Date.now(),
+        };
+        saveStoredWebAccounts(webAccounts);
 
-      // Save active session
-      localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(userData));
-      return userData;
+        // Save active session
+        localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(userData));
+        return userData;
+      }
     } else {
-      // Server returned explicit error (e.g. 404 account not found, or 401 wrong password)
-      throw new Error(data.error || 'Tài khoản hoặc mật khẩu không chính xác.');
+      const data = await res.json().catch(() => null);
+      if (data && data.error && res.status !== 404) {
+        throw new Error(data.error);
+      }
     }
   } catch (err: any) {
-    // If server returned specific rejection, rethrow it
-    if (err.message && !err.message.includes('Failed to fetch') && !err.message.includes('NetworkError')) {
+    if (err.message && !err.message.includes('Failed to fetch') && !err.message.includes('NetworkError') && !err.message.includes('404')) {
       throw err;
     }
+  }
 
-    // 2. Offline fallback: check local web storage accounts if network is disconnected
-    const localAcc = webAccounts[cleanUsername];
-    if (localAcc) {
-      if (!verifyPassword(cleanPass, localAcc.passwordHash)) {
-        throw new Error('Mật khẩu không chính xác. Vui lòng kiểm tra lại.');
+  // 2. Cloud Fallback: Authenticate via Firestore (Works on GitHub Pages & Static Hosts)
+  try {
+    const userDocSnap = await getDoc(doc(db, 'users', cleanUsername));
+    if (userDocSnap.exists()) {
+      const cloudUser = userDocSnap.data() as any;
+      if (cloudUser.passwordHash) {
+        if (!verifyPassword(cleanPass, cloudUser.passwordHash)) {
+          throw new Error('Mật khẩu không chính xác. Vui lòng kiểm tra lại.');
+        }
+
+        const userData: UserAccountData = {
+          id: cloudUser.id || `usr_${cleanUsername}`,
+          username: cloudUser.username || cleanUsername,
+          displayName: cloudUser.displayName || cloudUser.username || cleanUsername,
+          photoURL: cloudUser.avatar || cloudUser.photoURL || '',
+          avatar: cloudUser.avatar || cloudUser.photoURL || '',
+          birthday: cloudUser.birthday,
+          gender: cloudUser.gender,
+          bio: cloudUser.bio,
+          loveQuote: cloudUser.loveQuote,
+          profile: cloudUser.profile,
+          roomCode: cloudUser.roomCode,
+          partnerUsername: cloudUser.partnerUsername,
+          partnerDisplayName: cloudUser.partnerDisplayName,
+          authProvider: 'username',
+          gdriveConnected: cloudUser.gdriveConnected,
+          gdriveEmail: cloudUser.gdriveEmail,
+          gdriveDisplayName: cloudUser.gdriveDisplayName,
+          gdriveFolderUrl: cloudUser.gdriveFolderUrl,
+          gdriveLastSaved: cloudUser.gdriveLastSaved,
+        };
+
+        // Cache to local web storage
+        webAccounts[cleanUsername] = {
+          ...userData,
+          passwordHash: cloudUser.passwordHash,
+          updatedAt: Date.now(),
+        };
+        saveStoredWebAccounts(webAccounts);
+
+        localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(userData));
+        return userData;
       }
+    }
+  } catch (err: any) {
+    if (err.message && (err.message.includes('Mật khẩu không chính xác') || err.message.includes('password'))) {
+      throw err;
+    }
+  }
 
-      const userData: UserAccountData = {
-        id: localAcc.id || `usr_${cleanUsername}`,
-        username: localAcc.username,
-        displayName: localAcc.displayName || localAcc.username,
-        photoURL: localAcc.avatar || localAcc.photoURL || '',
-        avatar: localAcc.avatar || localAcc.photoURL || '',
-        birthday: localAcc.birthday,
-        gender: localAcc.gender,
-        bio: localAcc.bio,
-        loveQuote: localAcc.loveQuote,
-        profile: localAcc.profile,
-        roomCode: localAcc.roomCode,
-        partnerUsername: localAcc.partnerUsername,
-        partnerDisplayName: localAcc.partnerDisplayName,
-        authProvider: 'username',
-      };
-
-      localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(userData));
-      return userData;
+  // 3. Offline fallback: check local web storage accounts if network is disconnected
+  const localAcc = webAccounts[cleanUsername];
+  if (localAcc) {
+    if (!verifyPassword(cleanPass, localAcc.passwordHash)) {
+      throw new Error('Mật khẩu không chính xác. Vui lòng kiểm tra lại.');
     }
 
-    throw new Error(err.message || `Tài khoản "${cleanUsername}" không tồn tại trên hệ thống.`);
+    const userData: UserAccountData = {
+      id: localAcc.id || `usr_${cleanUsername}`,
+      username: localAcc.username,
+      displayName: localAcc.displayName || localAcc.username,
+      photoURL: localAcc.avatar || localAcc.photoURL || '',
+      avatar: localAcc.avatar || localAcc.photoURL || '',
+      birthday: localAcc.birthday,
+      gender: localAcc.gender,
+      bio: localAcc.bio,
+      loveQuote: localAcc.loveQuote,
+      profile: localAcc.profile,
+      roomCode: localAcc.roomCode,
+      partnerUsername: localAcc.partnerUsername,
+      partnerDisplayName: localAcc.partnerDisplayName,
+      authProvider: 'username',
+    };
+
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(userData));
+    return userData;
   }
+
+  throw new Error(`Tài khoản "${cleanUsername}" không tồn tại trên hệ thống.`);
 }
 
 // 3. Sign In with Google Popup
@@ -397,7 +466,16 @@ export async function linkPartnerAccountService(partnerUsername: string): Promis
   };
   localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updatedUser));
 
-  // Sync to server
+  // Sync to Firestore cloud database
+  try {
+    const myDocRef = doc(db, 'users', current.username);
+    setDoc(myDocRef, { roomCode: sharedRoom, partnerUsername: cleanPartner, partnerDisplayName: partnerInfo.displayName, updatedAt: Date.now() }, { merge: true }).catch(() => {});
+
+    const partnerDocRef = doc(db, 'users', cleanPartner);
+    setDoc(partnerDocRef, { roomCode: sharedRoom, partnerUsername: current.username, partnerDisplayName: current.displayName, updatedAt: Date.now() }, { merge: true }).catch(() => {});
+  } catch (e) {}
+
+  // Sync to server if running
   try {
     fetch('/api/auth/link-partner', {
       method: 'POST',
@@ -445,6 +523,10 @@ export async function unlinkPartnerAccountService(
       roomCode: fallbackRoom,
     };
     localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updatedUser));
+
+    try {
+      setDoc(doc(db, 'users', cleanUsername), { partnerUsername: null, partnerDisplayName: null, roomCode: fallbackRoom, updatedAt: Date.now() }, { merge: true }).catch(() => {});
+    } catch {}
   }
 
   try {
@@ -504,6 +586,13 @@ export async function requestChangeRoomCode(
       roomCode: cleanNew,
     };
     localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updatedUser));
+
+    try {
+      setDoc(doc(db, 'users', current.username), { roomCode: cleanNew, updatedAt: Date.now() }, { merge: true }).catch(() => {});
+      if (migratePartner && current.partnerUsername) {
+        setDoc(doc(db, 'users', current.partnerUsername), { roomCode: cleanNew, updatedAt: Date.now() }, { merge: true }).catch(() => {});
+      }
+    } catch {}
   }
 
   try {
@@ -523,16 +612,16 @@ export async function requestChangeRoomCode(
   return { success: true, newRoomCode: cleanNew };
 }
 
-// 10. Fetch user's latest account profile from server (Authoritative Cross-Device Refresh)
+// 10. Fetch user's latest account profile from server or Firestore (Authoritative Cross-Device Refresh)
 export async function fetchUserLatestProfile(username: string): Promise<UserAccountData | null> {
   const clean = username.trim().toLowerCase();
 
-  // 1. Fetch live authoritative data from server first
+  // 1. Fetch live authoritative data from server first (if running)
   try {
     const res = await fetch(`/api/auth/user/${encodeURIComponent(clean)}`);
     if (res.ok) {
-      const data = await res.json();
-      if (data.success && data.user) {
+      const data = await res.json().catch(() => null);
+      if (data && data.success && data.user) {
         const liveUser: UserAccountData = {
           id: data.user.id || `usr_${clean}`,
           username: data.user.username,
@@ -568,11 +657,48 @@ export async function fetchUserLatestProfile(username: string): Promise<UserAcco
         return liveUser;
       }
     }
-  } catch (e) {
-    console.warn('Could not fetch latest user profile from server:', e);
-  }
+  } catch (e) {}
 
-  // 2. Fallback to local accounts if server is unreachable
+  // 2. Fetch from Firestore (For GitHub Pages and static deployments)
+  try {
+    const userDocSnap = await getDoc(doc(db, 'users', clean));
+    if (userDocSnap.exists()) {
+      const cloudUser = userDocSnap.data() as any;
+      const liveUser: UserAccountData = {
+        id: cloudUser.id || `usr_${clean}`,
+        username: cloudUser.username || clean,
+        displayName: cloudUser.displayName || cloudUser.username || clean,
+        photoURL: cloudUser.avatar || cloudUser.photoURL || '',
+        avatar: cloudUser.avatar || cloudUser.photoURL || '',
+        birthday: cloudUser.birthday,
+        gender: cloudUser.gender,
+        bio: cloudUser.bio,
+        loveQuote: cloudUser.loveQuote,
+        profile: cloudUser.profile,
+        roomCode: cloudUser.roomCode,
+        partnerUsername: cloudUser.partnerUsername,
+        partnerDisplayName: cloudUser.partnerDisplayName,
+        gdriveConnected: cloudUser.gdriveConnected,
+        gdriveEmail: cloudUser.gdriveEmail,
+        gdriveDisplayName: cloudUser.gdriveDisplayName,
+        gdriveFolderUrl: cloudUser.gdriveFolderUrl,
+        gdriveLastSaved: cloudUser.gdriveLastSaved,
+        authProvider: 'username',
+      };
+
+      const accounts = getStoredWebAccounts();
+      if (accounts[clean]) {
+        accounts[clean] = {
+          ...accounts[clean],
+          ...liveUser,
+        };
+        saveStoredWebAccounts(accounts);
+      }
+      return liveUser;
+    }
+  } catch (e) {}
+
+  // 3. Fallback to local accounts if server and Firestore are unreachable
   const accounts = getStoredWebAccounts();
   if (accounts[clean]) {
     return accounts[clean];
@@ -581,42 +707,38 @@ export async function fetchUserLatestProfile(username: string): Promise<UserAcco
   return null;
 }
 
-// 11. Update User Profile on Server (Authoritative Cross-Device Persistence)
+// 11. Update User Profile on Server and Firestore
 export async function updateUserProfileOnServer(username: string, profile: any): Promise<any> {
+  const clean = username.trim().toLowerCase();
+  try {
+    setDoc(doc(db, 'users', clean), { profile, displayName: profile?.name, birthday: profile?.birthday, avatar: profile?.avatar, updatedAt: Date.now() }, { merge: true }).catch(() => {});
+  } catch (e) {}
+
   try {
     const res = await fetch('/api/auth/update-profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        username,
+        username: clean,
         profile,
       }),
     });
     if (res.ok) {
-      const data = await res.json();
-      if (data.success && data.user) {
-        // Update local active session
+      const data = await res.json().catch(() => null);
+      if (data && data.success && data.user) {
         const current = getCurrentAuthUser();
         if (current) {
-          const updated: UserAccountData = {
+          const updated = {
             ...current,
-            displayName: data.user.displayName || current.displayName,
-            photoURL: data.user.avatar || current.photoURL,
-            avatar: data.user.avatar || current.avatar,
-            birthday: data.user.birthday || current.birthday,
-            gender: data.user.gender || current.gender,
-            bio: data.user.bio || current.bio,
-            loveQuote: data.user.loveQuote || current.loveQuote,
-            profile: data.user.profile || current.profile,
+            ...data.user,
           };
           localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updated));
         }
         return data.user;
       }
     }
-  } catch (e) {
-    console.warn('Could not update user profile on server:', e);
-  }
+  } catch (e) {}
+
   return null;
 }
 
