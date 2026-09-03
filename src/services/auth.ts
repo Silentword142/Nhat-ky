@@ -44,6 +44,17 @@ export interface StoredAccountRecord extends UserAccountData {
 const AUTH_STORAGE_KEY = 'lovesync_auth_user';
 const WEB_ACCOUNTS_KEY = 'lovesync_web_accounts_v1';
 
+// Firestore calls have no built-in timeout — if the network/browser (ad blockers, incognito
+// tracking protection, flaky connections) never lets the request resolve, an unguarded `await`
+// hangs forever with no error and no way out for the user. Every Firestore call in the auth flow
+// must be wrapped in this so the UI can always fall back / fail gracefully within a few seconds.
+function withTimeout<T>(promise: Promise<T>, ms = 8000): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), ms)),
+  ]);
+}
+
 // Helper: Safely get all accounts stored on this website/browser
 export function getStoredWebAccounts(): Record<string, StoredAccountRecord> {
   try {
@@ -123,7 +134,7 @@ export async function registerAccount(
   // that other person's password (setDoc with merge only merges fields, it doesn't protect
   // existing ones like passwordHash).
   try {
-    const existingCloudUser = await getDoc(doc(db, 'users', cleanUsername));
+    const existingCloudUser = await withTimeout(getDoc(doc(db, 'users', cleanUsername)));
     if (existingCloudUser.exists()) {
       throw new Error(`Tên tài khoản "${username.trim()}" đã được đăng ký trên hệ thống. Bạn hãy chọn tên khác hoặc chuyển sang tab Đăng Nhập nhé.`);
     }
@@ -131,7 +142,7 @@ export async function registerAccount(
     if (err.message && err.message.includes('đã được đăng ký')) {
       throw err;
     }
-    console.warn('[Firestore Auth] Could not check existing account (offline?):', err);
+    console.warn('[Firestore Auth] Could not check existing account (offline/timeout?):', err);
   }
 
   // 1. Submit to Backend Server first so the account exists for ALL devices
@@ -190,7 +201,7 @@ export async function registerAccount(
   let cloudSaveSucceeded = false;
   try {
     const userDocRef = doc(db, 'users', cleanUsername);
-    await setDoc(
+    await withTimeout(setDoc(
       userDocRef,
       {
         ...newUserData,
@@ -198,7 +209,7 @@ export async function registerAccount(
         updatedAt: Date.now(),
       },
       { merge: true }
-    );
+    ));
     cloudSaveSucceeded = true;
   } catch (e) {
     console.warn('[Firestore Auth] Save user error:', e);
@@ -299,7 +310,7 @@ export async function loginAccount(username: string, pass: string): Promise<User
 
   // 2. Cloud Fallback: Authenticate via Firestore (Works on GitHub Pages & Static Hosts)
   try {
-    const userDocSnap = await getDoc(doc(db, 'users', cleanUsername));
+    const userDocSnap = await withTimeout(getDoc(doc(db, 'users', cleanUsername)));
     if (userDocSnap.exists()) {
       const cloudUser = userDocSnap.data() as any;
       if (cloudUser.passwordHash) {
@@ -691,7 +702,7 @@ export async function fetchUserLatestProfile(username: string): Promise<UserAcco
 
   // 2. Fetch from Firestore (For GitHub Pages and static deployments)
   try {
-    const userDocSnap = await getDoc(doc(db, 'users', clean));
+    const userDocSnap = await withTimeout(getDoc(doc(db, 'users', clean)));
     if (userDocSnap.exists()) {
       const cloudUser = userDocSnap.data() as any;
       const liveUser: UserAccountData = {
@@ -842,9 +853,9 @@ export async function changePasswordWithoutOld(
   // this, a password change here would never be visible to a login attempt from another device.
   try {
     const userDocRef = doc(db, 'users', cleanUsername);
-    const cloudUser = await getDoc(userDocRef);
+    const cloudUser = await withTimeout(getDoc(userDocRef));
     if (cloudUser.exists()) {
-      await setDoc(userDocRef, { passwordHash: hashPassword(cleanPass), updatedAt: Date.now() }, { merge: true });
+      await withTimeout(setDoc(userDocRef, { passwordHash: hashPassword(cleanPass), updatedAt: Date.now() }, { merge: true }));
       foundSomewhere = true;
     }
   } catch (err) {
