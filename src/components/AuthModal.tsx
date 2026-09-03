@@ -39,9 +39,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   const {
     myProfile,
     settings,
-    updateMyProfile,
-    updateSettings,
-    setRoomCode,
     clearAllUserDataAndLogout,
     loginWithUserAccount,
   } = useCouple();
@@ -180,21 +177,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
 
       soundService.playSparkle();
 
-      if (user.roomCode) {
-        setRoomCode(user.roomCode);
-      }
-
-      updateMyProfile({
-        name: user.displayName || myProfile.name,
-        avatar: user.photoURL || myProfile.avatar,
-        email: user.email || undefined,
-        authProvider: 'google',
-      });
-
-      updateSettings({
-        accountEmail: user.email || undefined,
-        roomCode: user.roomCode || settings.roomCode,
-      });
+      // Same login pipeline as username/password and register — this is what actually assigns
+      // the account's real userId (myUserId) for realtime sync. Without it, this browser keeps
+      // using its old guest/local id and the partner can never see this person's presence or
+      // content in the room, even after both sides type the exact same room code.
+      loginWithUserAccount(user);
 
       setSuccessMsg('Đăng nhập Google thành công! 💖');
       setTimeout(() => {

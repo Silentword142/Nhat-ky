@@ -1736,23 +1736,6 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setPartnerAccountInfo(null);
       }
 
-      // Restore Google Drive status if present on user account
-      if (user.gdriveConnected) {
-        setIsGoogleDriveConnected(true);
-        if (user.gdriveEmail) {
-          setGoogleUser({
-            email: user.gdriveEmail,
-            displayName: user.gdriveDisplayName || user.gdriveEmail,
-          });
-        }
-        if (user.gdriveFolderUrl) {
-          setGoogleDriveFolderUrl(user.gdriveFolderUrl);
-        }
-        if (user.gdriveLastSaved) {
-          setGoogleDriveLastSavedAt(user.gdriveLastSaved);
-        }
-      }
-
       const assignedRoom = (user.roomCode || `ROOM-${user.username.toUpperCase()}`).toUpperCase().trim();
       const cleanUserId = user.id || `usr_${user.username.toLowerCase()}`;
 
