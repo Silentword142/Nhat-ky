@@ -851,12 +851,17 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const nowTime = Date.now();
       try {
         const roomDocRef = doc(db, 'rooms', cleanRoom);
+        // Avatars can be a raw base64 data: URL (e.g. a freshly cropped photo not yet uploaded
+        // anywhere) — writing that directly here (unlike broadcastRoomChanges) skipped the same
+        // size safeguard, risking pushing the room document over Firestore's 1MiB cap and
+        // silently breaking sync for the whole room, partner included.
+        const safeAvatar = stripHeavyInlineDataForCloudSync(myProfile.avatar);
         setDoc(
           roomDocRef,
           {
             [`profiles.${myUserId}.lastActive`]: nowTime,
             [`profiles.${myUserId}.name`]: myProfile.name,
-            [`profiles.${myUserId}.avatar`]: myProfile.avatar,
+            [`profiles.${myUserId}.avatar`]: safeAvatar,
           },
           { merge: true }
         ).catch(() => {});
@@ -1749,7 +1754,17 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           ...userProfile,
           id: cleanUserId,
           name: user.displayName || userProfile.name || user.username,
-          avatar: user.avatar || user.photoURL || userProfile.avatar || prev.avatar || DEFAULT_AVATAR_ME,
+          // Prefer a custom avatar the user already set (saved to their account profile, or
+          // already showing locally and not just the generic placeholder) over the raw
+          // Google/OAuth photo — otherwise every Google re-login silently discards a custom
+          // uploaded avatar in favor of the provider photo. A first-time login (still on the
+          // generic default) falls through to the Google photo as a sensible starting avatar.
+          avatar:
+            userProfile.avatar ||
+            (prev.avatar && prev.avatar !== DEFAULT_AVATAR_ME ? prev.avatar : null) ||
+            user.avatar ||
+            user.photoURL ||
+            DEFAULT_AVATAR_ME,
           birthday: user.birthday || userProfile.birthday || prev.birthday,
           gender: user.gender || userProfile.gender || prev.gender,
           bio: user.bio || userProfile.bio || prev.bio,
