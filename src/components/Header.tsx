@@ -20,7 +20,6 @@ export const Header: React.FC = () => {
     sendHeartbeat,
     updateSettings,
     isGoogleDriveConnected,
-    googleDriveLastSavedAt,
     isGoogleDriveSyncing,
     connectGoogleDrive,
   } = useCouple();
@@ -142,8 +141,8 @@ export const Header: React.FC = () => {
               }`}
               title={
                 isGoogleDriveConnected
-                  ? `Google Drive đã kết nối (Lưu lúc ${googleDriveLastSavedAt || 'gần đây'})`
-                  : 'Bấm để kết nối và tự động sao lưu dữ liệu lên Google Drive'
+                  ? 'Google Drive đã kết nối — dùng để lưu ảnh khi bạn tải lên Album ảnh'
+                  : 'Bấm để kết nối Google Drive trước — bắt buộc để tải ảnh lên Album ảnh'
               }
             >
               <span>📁</span>
@@ -151,7 +150,7 @@ export const Header: React.FC = () => {
                 {isGoogleDriveSyncing
                   ? 'Đang kết nối...'
                   : isGoogleDriveConnected
-                  ? 'Google Drive: Đã lưu'
+                  ? 'Google Drive: Đã kết nối'
                   : 'Google Drive: Bấm để bật'}
               </span>
             </button>

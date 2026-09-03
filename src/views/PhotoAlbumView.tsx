@@ -523,9 +523,30 @@ export const PhotoAlbumView: React.FC = () => {
     setIsUploadingToDrive(true);
     soundService.playSparkle();
 
+    // Google Drive is required for every photo upload — it's the only place photo files are
+    // stored. Prompt to connect right here if needed, instead of silently falling back to a
+    // local-only base64 copy that the partner would never see.
     let token = await getAccessToken();
+    if (!token) {
+      setUploadProgressText('Cần kết nối Google Drive trước khi tải ảnh lên...');
+      try {
+        const connected = await connectGoogleDrive();
+        token = connected ? await getAccessToken() : null;
+      } catch (err) {
+        console.warn('Google Drive connect error during upload:', err);
+      }
+    }
+
+    if (!token) {
+      setIsUploadingToDrive(false);
+      setUploadProgressText('');
+      soundService.playPop();
+      alert('Cần kết nối Google Drive để tải ảnh lên — vui lòng thử lại và cho phép đăng nhập Google.');
+      return;
+    }
 
     const newPhotosPayload: any[] = [];
+    const failedFileNames: string[] = [];
 
     for (let i = 0; i < batchFilesPreview.length; i++) {
       const item = batchFilesPreview[i];
@@ -534,53 +555,64 @@ export const PhotoAlbumView: React.FC = () => {
       );
 
       let driveData: any = null;
-      if (token) {
-        try {
-          if (item.file) {
-            driveData = await uploadOriginalImageToDrive(token, item.file, item.file.name, targetAlbum);
-          } else if (item.url) {
-            driveData = await uploadDataUrlImageToDrive(token, item.url, `${item.title}.png`, targetAlbum);
-          }
-        } catch (uploadErr) {
-          console.warn('Upload to Google Drive notice:', uploadErr);
+      try {
+        if (item.file) {
+          driveData = await uploadOriginalImageToDrive(token, item.file, item.file.name, targetAlbum);
+        } else if (item.url) {
+          driveData = await uploadDataUrlImageToDrive(token, item.url, `${item.title}.png`, targetAlbum);
         }
+      } catch (uploadErr) {
+        console.warn('Upload to Google Drive notice:', uploadErr);
+      }
+
+      // Skip this photo entirely if the Drive upload failed — never fall back to storing the
+      // raw base64 locally, since that photo would silently never reach the partner or Firestore.
+      if (!driveData?.fileId || !driveData?.directUrl) {
+        failedFileNames.push(item.title || item.file?.name || `Ảnh ${i + 1}`);
+        continue;
       }
 
       newPhotosPayload.push({
         title: item.title.trim() || `Kỷ niệm ngọt ngào ${i + 1}`,
         caption: batchDefaultCaption.trim(),
-        // Prefer the lightweight Google Drive URL once uploaded — keeps Firestore sync documents
-        // small and lets the partner's device load the photo too. Falls back to the local base64
-        // preview only when Drive isn't connected/upload failed (device-local only in that case).
-        imageUrl: driveData?.directUrl || item.url,
-        thumbnailUrl: driveData?.thumbnailUrl,
+        imageUrl: driveData.directUrl,
+        thumbnailUrl: driveData.thumbnailUrl,
         date: batchDefaultDate,
         location: batchDefaultLocation.trim() || undefined,
         frameStyle: batchDefaultFrame,
         albumId: targetAlbum,
         albumName: targetAlbum,
         tags: [targetAlbum],
-        originalQuality: !!driveData?.fileId,
-        originalFileId: driveData?.fileId,
-        driveFolderId: driveData?.folderId,
-        driveViewUrl: driveData?.webViewLink,
-        driveDownloadUrl: driveData?.downloadUrl,
+        originalQuality: true,
+        originalFileId: driveData.fileId,
+        driveFolderId: driveData.folderId,
+        driveViewUrl: driveData.webViewLink,
+        driveDownloadUrl: driveData.downloadUrl,
         fileSize: item.size,
         fileName: item.file?.name,
       });
     }
 
-    addPhotosBatch(newPhotosPayload);
+    if (newPhotosPayload.length > 0) {
+      addPhotosBatch(newPhotosPayload);
+    }
 
-    // If album doesn't have cover yet, set first photo as cover
-    setAlbumsList((prev) =>
-      prev.map((alb) => {
-        if ((alb.id === targetAlbum || alb.name === targetAlbum) && (!alb.coverImage || alb.coverImage.includes('unsplash'))) {
-          return { ...alb, coverImage: batchFilesPreview[0].url };
-        }
-        return alb;
-      })
-    );
+    if (failedFileNames.length > 0) {
+      soundService.playPop();
+      alert(`Không thể tải lên Google Drive: ${failedFileNames.join(', ')}. Các ảnh này chưa được lưu, vui lòng thử lại.`);
+    }
+
+    // If album doesn't have cover yet, set first successfully-uploaded photo as cover
+    if (newPhotosPayload[0]?.imageUrl) {
+      setAlbumsList((prev) =>
+        prev.map((alb) => {
+          if ((alb.id === targetAlbum || alb.name === targetAlbum) && (!alb.coverImage || alb.coverImage.includes('unsplash'))) {
+            return { ...alb, coverImage: newPhotosPayload[0].imageUrl };
+          }
+          return alb;
+        })
+      );
+    }
 
     // Reset and close
     setIsUploadingToDrive(false);
@@ -1543,21 +1575,12 @@ export const PhotoAlbumView: React.FC = () => {
                   />
                 </div>
 
-                {/* Warning when Drive isn't connected: photos will stay local-only on this device */}
+                {/* Notice when Drive isn't connected yet: submitting will prompt for it first */}
                 {!isGoogleDriveConnected && !isUploadingToDrive && (
                   <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 flex items-start gap-2.5">
                     <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                     <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
-                      Chưa kết nối Google Drive: ảnh sẽ chỉ lưu tạm trên máy này, người yêu sẽ{' '}
-                      <strong>không thấy được</strong> ảnh này ở máy của họ. Bấm{' '}
-                      <button
-                        type="button"
-                        onClick={() => connectGoogleDrive()}
-                        className="underline font-bold hover:text-amber-900 dark:hover:text-amber-200"
-                      >
-                        Kết Nối Google Drive
-                      </button>{' '}
-                      trước khi tải ảnh lên để lưu vĩnh viễn và đồng bộ cho cả hai.
+                      Chưa kết nối Google Drive — ảnh chỉ được lưu vào Drive, không nơi nào khác. Khi bạn bấm lưu, app sẽ tự mở cửa sổ đăng nhập Google Drive trước.
                     </p>
                   </div>
                 )}

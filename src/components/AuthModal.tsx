@@ -14,10 +14,6 @@ import {
   Smartphone,
   Trash2,
   ArrowRight,
-  Cloud,
-  HardDrive,
-  RefreshCw,
-  FolderOpen,
 } from 'lucide-react';
 import { useCouple } from '../context/CoupleContext';
 import { soundService } from '../services/sound';
@@ -33,14 +29,6 @@ import {
   saveStoredWebAccounts,
   StoredAccountRecord,
 } from '../services/auth';
-import {
-  loadAccountsVaultFromDrive,
-  saveAccountsVaultToDrive,
-  loadCoupleDataFromDrive,
-  saveCoupleDataToDrive,
-  APP_FOLDER_NAME,
-} from '../services/googleDrive';
-import { googleSignIn, getAccessToken } from '../services/googleAuth';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -56,13 +44,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     setRoomCode,
     clearAllUserDataAndLogout,
     loginWithUserAccount,
-    isGoogleDriveConnected,
-    googleUser,
-    connectGoogleDrive,
-    saveToGoogleDriveNow,
-    loadFromGoogleDriveNow,
-    googleDriveFolderUrl,
-    googleDriveLastSavedAt,
   } = useCouple();
 
   const [activeTab, setActiveTab] = useState<'login' | 'register' | 'change_password'>('register');
@@ -75,10 +56,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [isDriveLoading, setIsDriveLoading] = useState(false);
   const [savedAccounts, setSavedAccounts] = useState<Record<string, StoredAccountRecord>>({});
 
-  // Reload saved web accounts & sync with Google Drive if available
+  // Reload accounts saved on this device (local convenience list only — accounts live in
+  // Firebase, this is not synced anywhere)
   useEffect(() => {
     if (isOpen) {
       const stored = getStoredWebAccounts();
@@ -86,78 +67,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
       setErrorMsg(null);
       setSuccessMsg(null);
       setIsLoading(false);
-
-      // If Google Drive is already connected, auto-check and restore vault
-      if (isGoogleDriveConnected) {
-        getAccessToken().then((token) => {
-          if (token) {
-            loadAccountsVaultFromDrive(token).then((res) => {
-              if (res.success && res.accounts && Object.keys(res.accounts).length > 0) {
-                const merged = { ...getStoredWebAccounts(), ...res.accounts };
-                saveStoredWebAccounts(merged);
-                setSavedAccounts(merged);
-              }
-            }).catch(() => {});
-          }
-        });
-      }
     }
-  }, [isOpen, isGoogleDriveConnected]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   const currentAuth = getCurrentAuthUser();
   const isLoggedIn = !!currentAuth?.username || !!myProfile.email || (myProfile.authProvider && myProfile.authProvider !== 'guest');
 
-  // Handle Google Drive First Login / Vault Restore
-  const handleConnectGoogleDriveFirst = async () => {
-    setIsDriveLoading(true);
-    setErrorMsg(null);
-    try {
-      soundService.playPop();
-      const res = await googleSignIn();
-      if (!res || !res.accessToken) {
-        setIsDriveLoading(false);
-        return;
-      }
-
-      soundService.playSparkle();
-      const token = res.accessToken;
-
-      // 1. Fetch saved accounts from Google Drive vault
-      const vaultRes = await loadAccountsVaultFromDrive(token);
-      let localAccounts = getStoredWebAccounts();
-
-      if (vaultRes.success && vaultRes.accounts && Object.keys(vaultRes.accounts).length > 0) {
-        localAccounts = { ...localAccounts, ...vaultRes.accounts };
-        saveStoredWebAccounts(localAccounts);
-        setSavedAccounts(localAccounts);
-        setSuccessMsg(`Đã kết nối Google Drive & tải về ${Object.keys(vaultRes.accounts).length} tài khoản! ☁️✨`);
-      } else {
-        // Backup local accounts to drive vault
-        if (Object.keys(localAccounts).length > 0) {
-          await saveAccountsVaultToDrive(token, localAccounts);
-        }
-        setSuccessMsg('Đã kết nối Google Drive thành công! Thư mục lưu trữ an toàn đã sẵn sàng ☁️💖');
-      }
-
-      // 2. Also try restoring room data from Google Drive
-      try {
-        await loadFromGoogleDriveNow();
-      } catch {}
-
-      setTimeout(() => {
-        setIsDriveLoading(false);
-        setSuccessMsg(null);
-      }, 2000);
-    } catch (err: any) {
-      console.error('Google Drive Auth Error:', err);
-      setIsDriveLoading(false);
-      setErrorMsg(err.message || 'Không thể kết nối Google Drive.');
-    }
-  };
-
-  // Handle Account Registration (Also saves to Google Drive)
+  // Handle Account Registration
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanUser = username.trim().toLowerCase();
@@ -193,13 +111,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
       const allAccounts = getStoredWebAccounts();
       setSavedAccounts(allAccounts);
 
-      // Auto backup accounts registry to Google Drive if connected
-      const token = await getAccessToken();
-      if (token) {
-        saveAccountsVaultToDrive(token, allAccounts).catch(() => {});
-        saveToGoogleDriveNow().catch(() => {});
-      }
-
       if (user.cloudSyncFailed) {
         setSuccessMsg(null);
         setErrorMsg(
@@ -221,7 +132,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     }
   };
 
-  // Handle Account Login (With Google Drive synchronization)
+  // Handle Account Login
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanUser = username.trim().toLowerCase();
@@ -241,12 +152,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
 
       const allAccounts = getStoredWebAccounts();
       setSavedAccounts(allAccounts);
-
-      // Sync to Google Drive
-      const token = await getAccessToken();
-      if (token) {
-        saveAccountsVaultToDrive(token, allAccounts).catch(() => {});
-      }
 
       setSuccessMsg(`Đăng nhập thành công! Chào mừng ${user.displayName || user.username} 💖`);
       setTimeout(() => {
@@ -374,19 +279,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     setErrorMsg(null);
   };
 
-  // Delete a saved account from web browser & Google Drive
-  const handleDeleteSavedAccount = async (e: React.MouseEvent, accUsername: string) => {
+  // Delete a saved account from this device's local list
+  const handleDeleteSavedAccount = (e: React.MouseEvent, accUsername: string) => {
     e.stopPropagation();
     soundService.playPop();
     const updated = { ...savedAccounts };
     delete updated[accUsername];
     saveStoredWebAccounts(updated);
     setSavedAccounts(updated);
-
-    const token = await getAccessToken();
-    if (token) {
-      saveAccountsVaultToDrive(token, updated).catch(() => {});
-    }
   };
 
   const savedAccountList: StoredAccountRecord[] = Object.values(savedAccounts);
@@ -407,10 +307,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
             </span>
             <div>
               <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100 font-cute">
-                {isLoggedIn ? 'Tài Khoản Của Bạn 💖' : 'Đăng Nhập & Đồng Bộ Google Drive'}
+                {isLoggedIn ? 'Tài Khoản Của Bạn 💖' : 'Đăng Nhập & Tạo Tài Khoản'}
               </h3>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Lưu trữ vĩnh viễn và đồng bộ toàn bộ dữ liệu tình yêu
+                Lưu trữ vĩnh viễn trên Firebase, đồng bộ mọi thiết bị
               </p>
             </div>
           </div>
@@ -423,77 +323,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
           </button>
         </div>
 
-        {/* Google Drive Status Banner / Requirement Box */}
-        <div className={`p-3.5 rounded-2xl border transition ${
-          isGoogleDriveConnected
-            ? 'bg-emerald-50/80 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/60'
-            : 'bg-blue-50/90 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/60'
-        }`}>
-          <div className="flex items-center justify-between gap-2 mb-1.5">
-            <div className="flex items-center gap-2">
-              <div className={`p-1.5 rounded-xl ${isGoogleDriveConnected ? 'bg-emerald-500 text-white' : 'bg-blue-500 text-white'}`}>
-                <Cloud className="w-4 h-4" />
-              </div>
-              <div>
-                <h4 className="text-xs font-bold text-zinc-800 dark:text-zinc-100 flex items-center gap-1.5">
-                  <span>Google Drive Đám Mây</span>
-                  {isGoogleDriveConnected ? (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-300 font-bold">
-                      Đã kết nối ☁️
-                    </span>
-                  ) : (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 font-bold">
-                      Khuyên dùng trước
-                    </span>
-                  )}
-                </h4>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  {isGoogleDriveConnected
-                    ? `Đang lưu tự động tại thư mục "${APP_FOLDER_NAME}"`
-                    : 'Đăng nhập Google Drive trước để tự động lấy lại toàn bộ tài khoản & kỷ niệm'}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-2 flex items-center gap-2">
-            {!isGoogleDriveConnected ? (
-              <button
-                type="button"
-                disabled={isDriveLoading}
-                onClick={handleConnectGoogleDriveFirst}
-                className="w-full py-2 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition cursor-pointer active:scale-98 disabled:opacity-50"
-              >
-                <Cloud className="w-3.5 h-3.5" />
-                <span>{isDriveLoading ? 'Đang kết nối & tải dữ liệu...' : 'Đăng Nhập Google Drive để lấy dữ liệu về'}</span>
-              </button>
-            ) : (
-              <div className="w-full flex items-center justify-between gap-2 text-[11px]">
-                <span className="text-emerald-700 dark:text-emerald-400 font-medium">
-                  {googleUser?.email ? `Tài khoản: ${googleUser.email}` : 'Đã sẵn sàng đồng bộ vĩnh viễn'}
-                </span>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    soundService.playPop();
-                    setIsDriveLoading(true);
-                    try {
-                      await loadFromGoogleDriveNow();
-                      setSuccessMsg('Đã làm mới dữ liệu từ Google Drive thành công! ☁️✨');
-                      setTimeout(() => setSuccessMsg(null), 1500);
-                    } catch {}
-                    setIsDriveLoading(false);
-                  }}
-                  disabled={isDriveLoading}
-                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1 transition cursor-pointer"
-                >
-                  <RefreshCw className={`w-3 h-3 ${isDriveLoading ? 'animate-spin' : ''}`} />
-                  <span>Đồng bộ lại</span>
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
 
         {/* Alerts */}
         {errorMsg && (
@@ -536,22 +365,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                 </div>
               </div>
             </div>
-
-            {/* Google Drive Status Link */}
-            {googleDriveFolderUrl && (
-              <a
-                href={googleDriveFolderUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/70 dark:border-zinc-700/60 text-xs flex items-center justify-between text-blue-600 dark:text-blue-400 hover:underline"
-              >
-                <span className="flex items-center gap-1.5">
-                  <FolderOpen className="w-4 h-4" />
-                  <span>Mở thư mục Google Drive của bạn:</span>
-                </span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </a>
-            )}
 
             {/* Logout and Change Password buttons */}
             <div className="pt-2 flex items-center justify-between gap-3">
@@ -683,12 +496,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
               </span>
             </div>
 
-            {/* Saved Accounts on Web / Google Drive Quick Selector */}
+            {/* Accounts previously used on this device (local convenience list only) */}
             {savedAccountList.length > 0 && activeTab === 'login' && (
               <div className="p-3 rounded-2xl bg-rose-50/50 dark:bg-zinc-800/60 border border-rose-100 dark:border-zinc-700">
                 <div className="text-[11px] font-bold text-zinc-600 dark:text-zinc-300 flex items-center gap-1.5 mb-2">
                   <Smartphone className="w-3.5 h-3.5 text-rose-500" />
-                  <span>Tài khoản đã lấy về từ Google Drive / Web:</span>
+                  <span>Tài khoản đã dùng trên máy này:</span>
                 </div>
                 <div className="space-y-1.5 max-h-36 overflow-y-auto">
                   {savedAccountList.map((acc) => (
@@ -813,7 +626,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                   className="w-full py-3 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white font-bold text-xs sm:text-sm shadow-md shadow-rose-200 dark:shadow-rose-950 flex items-center justify-center gap-2 transition active:scale-98 cursor-pointer disabled:opacity-50"
                 >
                   <UserPlus className="w-4 h-4" />
-                  <span>{isLoading ? 'Đang tạo tài khoản...' : 'Lập Tài Khoản & Lưu Google Drive 💖'}</span>
+                  <span>{isLoading ? 'Đang tạo tài khoản...' : 'Lập Tài Khoản Mới 💖'}</span>
                 </button>
               </form>
             )}

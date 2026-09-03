@@ -67,13 +67,10 @@ export const SettingsView: React.FC = () => {
     googleUser,
     isGoogleDriveConnected,
     isGoogleDriveSyncing,
-    googleDriveLastSavedAt,
     googleDriveFolderUrl,
     googleDriveFolderName,
     connectGoogleDrive,
     disconnectGoogleDrive,
-    saveToGoogleDriveNow,
-    loadFromGoogleDriveNow,
     syncNow,
     setRoomCode,
     changeCoupleRoomCode,
@@ -355,7 +352,7 @@ export const SettingsView: React.FC = () => {
       setDriveActionNotice('Đang mở cửa sổ đăng nhập Google Drive...');
       const ok = await connectGoogleDrive();
       if (ok) {
-        setDriveActionNotice(`Đã kết nối Google Drive và sao lưu tự động vào thư mục "${googleDriveFolderName}"! 🎉`);
+        setDriveActionNotice(`Đã kết nối Google Drive! Ảnh bạn tải lên Album ảnh sẽ được lưu vào thư mục "${googleDriveFolderName}". 🎉`);
         setTimeout(() => setDriveActionNotice(null), 5000);
       } else {
         setDriveActionNotice('Cửa sổ Google đã đóng hoặc chưa hoàn tất cấp quyền. Bạn có thể nhấn lại để thử lại nhé.');
@@ -383,27 +380,6 @@ export const SettingsView: React.FC = () => {
     await disconnectGoogleDrive();
     setDriveActionNotice('Đã ngắt kết nối Google Drive.');
     setTimeout(() => setDriveActionNotice(null), 3000);
-  };
-
-  const handleSaveToDrive = async () => {
-    const res = await saveToGoogleDriveNow();
-    if (res.success) {
-      setDriveActionNotice(`Đã lưu toàn bộ dữ liệu tình yêu vào thư mục "${googleDriveFolderName}" trên Google Drive!`);
-      setTimeout(() => setDriveActionNotice(null), 5000);
-    } else {
-      setDriveActionNotice(`Lỗi lưu Drive: ${res.error}`);
-    }
-  };
-
-  const handleLoadFromDrive = async () => {
-    if (!window.confirm('Bạn có muốn tải và khôi phục dữ liệu từ Google Drive không? (Dữ liệu trên máy sẽ được cập nhật)')) return;
-    const res = await loadFromGoogleDriveNow();
-    if (res.success) {
-      setDriveActionNotice('Đã khôi phục dữ liệu từ Google Drive thành công! 💖');
-      setTimeout(() => setDriveActionNotice(null), 4000);
-    } else {
-      setDriveActionNotice(`Lỗi tải: ${res.error}`);
-    }
   };
 
   // Manual Instant Sync
@@ -752,7 +728,7 @@ export const SettingsView: React.FC = () => {
           )}
         </div>
 
-        {/* GOOGLE DRIVE DEDICATED FOLDER CLOUD STORAGE CARD */}
+        {/* GOOGLE DRIVE — PHOTO FILE STORAGE ONLY */}
         <div className="mt-5 p-5 rounded-3xl bg-gradient-to-br from-blue-50/80 via-indigo-50/30 to-white dark:from-zinc-800/80 dark:to-zinc-900 border border-blue-200/80 dark:border-blue-900/50">
           <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
             <div className="flex items-center gap-2.5">
@@ -761,13 +737,13 @@ export const SettingsView: React.FC = () => {
               </div>
               <div>
                 <h4 className="text-sm font-bold text-zinc-800 dark:text-zinc-100 font-cute flex items-center gap-1.5">
-                  <span>Lưu Trữ Google Drive (Thư Mục Riêng)</span>
+                  <span>Lưu Trữ Ảnh Google Drive</span>
                   <span className="px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-mono font-semibold">
                     Google Drive API
                   </span>
                 </h4>
                 <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-cute">
-                  Tất cả nhật ký, ảnh, thư tình và cài đặt được lưu vào thư mục riêng <span className="font-semibold text-blue-600 dark:text-blue-400 font-mono">"{googleDriveFolderName}"</span> trên Google Drive của bạn.
+                  Ảnh bạn tải lên Album ảnh được lưu vào thư mục riêng <span className="font-semibold text-blue-600 dark:text-blue-400 font-mono">"{googleDriveFolderName}"</span> trên Google Drive của bạn — bắt buộc phải kết nối trước khi tải ảnh. Nhật ký, thư tay, ngày kỷ niệm và cài đặt luôn nằm trên Firebase, không liên quan tới Drive.
                 </p>
               </div>
             </div>
@@ -796,61 +772,25 @@ export const SettingsView: React.FC = () => {
 
           {isGoogleDriveConnected ? (
             <div className="space-y-3">
-              <div className="p-3.5 rounded-2xl bg-white dark:bg-zinc-800/80 border border-blue-100 dark:border-zinc-700 text-xs space-y-2">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex items-center gap-2">
-                    <Cloud className="w-4 h-4 text-blue-500" />
-                    <span className="text-zinc-700 dark:text-zinc-300 font-medium">
-                      Trạng thái tự động đồng bộ: <span className="text-emerald-600 dark:text-emerald-400 font-bold">Đang bật (Tự lưu sau mỗi thay đổi)</span>
-                    </span>
-                  </div>
-                  {googleDriveLastSavedAt && (
-                    <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                      Lần lưu gần nhất: <strong className="text-zinc-700 dark:text-zinc-300">{googleDriveLastSavedAt}</strong>
-                    </span>
-                  )}
+              {googleDriveFolderUrl && (
+                <div className="p-3.5 rounded-2xl bg-white dark:bg-zinc-800/80 border border-blue-100 dark:border-zinc-700 text-xs">
+                  <a
+                    href={googleDriveFolderUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 font-bold hover:underline"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Mở thư mục ảnh trên Google Drive</span>
+                  </a>
                 </div>
-
-                {googleDriveFolderUrl && (
-                  <div className="pt-1">
-                    <a
-                      href={googleDriveFolderUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 font-bold hover:underline"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      <span>Mở thư mục lưu trữ trên Google Drive</span>
-                    </a>
-                  </div>
-                )}
-              </div>
+              )}
 
               <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
-                  onClick={handleSaveToDrive}
-                  disabled={isGoogleDriveSyncing}
-                  className="px-4 py-2.5 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-sm flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
-                >
-                  <Download className={`w-3.5 h-3.5 ${isGoogleDriveSyncing ? 'animate-spin' : ''}`} />
-                  <span>{isGoogleDriveSyncing ? 'Đang lưu...' : 'Lưu Dữ Liệu Lên Google Drive Ngay'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleLoadFromDrive}
-                  disabled={isGoogleDriveSyncing}
-                  className="px-4 py-2.5 rounded-2xl bg-white dark:bg-zinc-800 hover:bg-blue-50 dark:hover:bg-zinc-700 border border-blue-200 dark:border-zinc-700 text-blue-700 dark:text-blue-300 font-bold text-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>Tải / Khôi Phục Từ Google Drive</span>
-                </button>
-
-                <button
-                  type="button"
                   onClick={handleDisconnectDrive}
-                  className="px-3 py-2 text-xs text-zinc-500 hover:text-rose-600 dark:text-zinc-400 dark:hover:text-rose-400 rounded-xl transition cursor-pointer flex items-center gap-1 ml-auto"
+                  className="px-3 py-2 text-xs text-zinc-500 hover:text-rose-600 dark:text-zinc-400 dark:hover:text-rose-400 rounded-xl transition cursor-pointer flex items-center gap-1"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   <span>Ngắt kết nối</span>
@@ -861,10 +801,10 @@ export const SettingsView: React.FC = () => {
             <div className="p-4 rounded-2xl bg-white dark:bg-zinc-800/70 border border-blue-100 dark:border-zinc-700/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
               <div className="text-xs text-zinc-600 dark:text-zinc-300 font-cute space-y-1">
                 <p className="font-semibold text-zinc-800 dark:text-zinc-100">
-                  Chuyển toàn bộ lưu trữ sang Google Drive cá nhân
+                  Kết nối để tải ảnh lên Album ảnh
                 </p>
                 <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  Dữ liệu được lưu trong thư mục riêng của bạn, không phụ thuộc vào Firebase, không lo hết hạn mức!
+                  Bắt buộc kết nối Google Drive trước khi tải bất kỳ ảnh nào lên — ảnh gốc được lưu trong Drive của chính bạn.
                 </p>
               </div>
               <button

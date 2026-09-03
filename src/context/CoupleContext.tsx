@@ -21,17 +21,8 @@ import {
   DEFAULT_AVATAR_PARTNER,
 } from '../services/mockData';
 import { soundService } from '../services/sound';
-import {
-  initAuth,
-  googleSignIn,
-  googleLogout,
-  getAccessToken,
-} from '../services/googleAuth';
-import {
-  saveCoupleDataToDrive,
-  loadCoupleDataFromDrive,
-  APP_FOLDER_NAME,
-} from '../services/googleDrive';
+import { initAuth, googleSignIn, googleLogout } from '../services/googleAuth';
+import { findOrCreateAppFolder, APP_FOLDER_NAME } from '../services/googleDrive';
 import { User } from 'firebase/auth';
 import { db, doc, setDoc, getDoc, onSnapshot } from '../services/firebase';
 import {
@@ -45,7 +36,6 @@ import {
   fetchUserLatestProfile,
   updateUserProfileOnServer,
   logoutAccount,
-  saveGoogleDriveStatusService,
   clearAllSystemDataService,
 } from '../services/auth';
 
@@ -74,17 +64,16 @@ export interface CoupleContextType {
   daysInLove: number;
   partnerAccountInfo: { username?: string; displayName?: string; birthday?: string } | null;
 
-  // Google Drive Cloud Storage (Dedicated Folder)
+  // Google Drive is used exclusively as photo file storage for the album (see
+  // src/services/googleDrive.ts) — connecting it is required before uploading a photo.
+  // All other app data (accounts, diaries, cards, anniversaries, settings) lives in Firebase only.
   googleUser: User | null;
   isGoogleDriveConnected: boolean;
   isGoogleDriveSyncing: boolean;
-  googleDriveLastSavedAt: string | null;
   googleDriveFolderUrl: string | null;
   googleDriveFolderName: string;
   connectGoogleDrive: () => Promise<boolean>;
   disconnectGoogleDrive: () => Promise<void>;
-  saveToGoogleDriveNow: () => Promise<{ success: boolean; error?: string; folderUrl?: string }>;
-  loadFromGoogleDriveNow: () => Promise<{ success: boolean; error?: string }>;
 
   // Sync & Room Actions
   syncNow: () => Promise<boolean>;
@@ -171,43 +160,6 @@ export function getItemTimestamp(item: any): number {
     if (!isNaN(t) && t > 0) return t;
   }
   return 0;
-}
-
-// Universal smart merge for arrays of items (diaries, photos, cards, anniversaries)
-export function smartMergeCollections<T extends { id?: string }>(
-  localList: T[] = [],
-  incomingList: T[] = [],
-  deletedIds: string[] = []
-): T[] {
-  const deletedSet = new Set(deletedIds || []);
-  const map = new Map<string, T>();
-
-  // 1. Add incoming items
-  for (const item of incomingList) {
-    if (item && item.id && !deletedSet.has(item.id)) {
-      map.set(item.id, item);
-    }
-  }
-
-  // 2. Merge local items
-  for (const item of localList) {
-    if (!item || !item.id || deletedSet.has(item.id)) continue;
-
-    const existing = map.get(item.id);
-    if (!existing) {
-      map.set(item.id, item);
-    } else {
-      const incomingTime = getItemTimestamp(existing);
-      const localTime = getItemTimestamp(item);
-      if (localTime >= incomingTime) {
-        map.set(item.id, { ...existing, ...item });
-      } else {
-        map.set(item.id, { ...item, ...existing });
-      }
-    }
-  }
-
-  return Array.from(map.values());
 }
 
 /**
@@ -480,9 +432,6 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return false;
   });
   const [isGoogleDriveSyncing, setIsGoogleDriveSyncing] = useState<boolean>(false);
-  const [googleDriveLastSavedAt, setGoogleDriveLastSavedAt] = useState<string | null>(() => {
-    return localStorage.getItem(`${STORAGE_KEY_PREFIX}gdrive_last_saved`);
-  });
   const [googleDriveFolderUrl, setGoogleDriveFolderUrl] = useState<string | null>(() => {
     return localStorage.getItem(`${STORAGE_KEY_PREFIX}gdrive_folder_url`);
   });
@@ -513,23 +462,6 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           } else {
             setPartnerAccountInfo(null);
           }
-          if (liveUser.gdriveConnected) {
-            setIsGoogleDriveConnected(true);
-            if (liveUser.gdriveEmail) {
-              setGoogleUser((prev: any) => ({
-                ...(prev || {}),
-                email: liveUser.gdriveEmail,
-                displayName: liveUser.gdriveDisplayName || liveUser.gdriveEmail,
-              }));
-            }
-            if (liveUser.gdriveFolderUrl) {
-              setGoogleDriveFolderUrl(liveUser.gdriveFolderUrl);
-            }
-            if (liveUser.gdriveLastSaved) {
-              setGoogleDriveLastSavedAt(liveUser.gdriveLastSaved);
-            }
-          }
-
           // Authoritative profile sync from server
           if (liveUser.profile || liveUser.avatar || liveUser.displayName || liveUser.birthday || liveUser.bio || liveUser.loveQuote) {
             const userProfile = liveUser.profile || {};
@@ -907,66 +839,6 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   }, [isAuthenticated, settings.roomCode, applyIncomingRoomData]);
 
-  // Auto-restore from Google Drive backup if the cloud room turns out empty/new
-  // (e.g. Firestore data was wiped, or this device/room never received the couple's data yet).
-  // Runs at most once per session, never overwrites a room that already has content, and never
-  // prompts a sign-in popup — it only uses an already-cached Drive session.
-  const hasAttemptedDriveAutoRestoreRef = useRef(false);
-  useEffect(() => {
-    if (!isAuthenticated || !settings.roomCode || !isGoogleDriveConnected) return;
-    if (hasAttemptedDriveAutoRestoreRef.current) return;
-
-    const cleanRoom = settings.roomCode.toUpperCase().trim();
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const roomSnap = await getDoc(doc(db, 'rooms', cleanRoom));
-        const roomData = roomSnap.exists() ? roomSnap.data() : null;
-        const isRoomEmpty =
-          !roomData ||
-          ((!Array.isArray(roomData.diaries) || roomData.diaries.length === 0) &&
-            (!Array.isArray(roomData.photos) || roomData.photos.length === 0) &&
-            (!Array.isArray(roomData.cards) || roomData.cards.length === 0));
-
-        if (!isRoomEmpty || cancelled) return;
-
-        // Only use an already-cached Drive session (never trigger a sign-in popup here)
-        const token = await getAccessToken();
-        if (!token || cancelled) return;
-
-        const result = await loadCoupleDataFromDrive(token, cleanRoom);
-        if (cancelled || !result.success || !result.data) return;
-
-        const backup = result.data;
-        const backupHasContent =
-          (Array.isArray(backup.diaries) && backup.diaries.length > 0) ||
-          (Array.isArray(backup.photos) && backup.photos.length > 0) ||
-          (Array.isArray(backup.cards) && backup.cards.length > 0);
-        if (!backupHasContent) return;
-
-        console.log('[GDrive] Cloud room was empty, restoring from Google Drive backup...');
-        applyIncomingRoomData(backup, 'gdrive_auto_restore');
-
-        // Re-publish the restored backup to Firestore so the partner's device picks it up too
-        try {
-          await setDoc(
-            doc(db, 'rooms', cleanRoom),
-            stripHeavyInlineDataForCloudSync({ ...backup, roomCode: cleanRoom, updatedAt: Date.now() }),
-            { merge: true }
-          );
-        } catch {}
-      } catch (err) {
-        console.warn('[GDrive] Auto-restore check failed:', err);
-      } finally {
-        hasAttemptedDriveAutoRestoreRef.current = true;
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isAuthenticated, settings.roomCode, isGoogleDriveConnected, applyIncomingRoomData]);
 
   // Heartbeat presence ping (sent to Firestore & Express Server)
   useEffect(() => {
@@ -1010,265 +882,8 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return () => clearInterval(interval);
   }, [isAuthenticated, settings.roomCode, myUserId, myProfile]);
 
-  // Google Drive Manual / Auto Save (Guarantees freshest authoritative data is saved, never stale device state)
-  const saveToGoogleDriveNow = useCallback(async (): Promise<{ success: boolean; error?: string; folderUrl?: string }> => {
-    try {
-      setIsGoogleDriveSyncing(true);
-      let token = await getAccessToken();
-      if (!token) {
-        // Prompt login if token is not currently cached in memory
-        const loginRes = await googleSignIn();
-        token = loginRes?.accessToken || null;
-      }
-      if (!token) {
-        throw new Error('Chưa đăng nhập Google để kết nối Google Drive.');
-      }
-
-      // 1. Fetch freshest authoritative state from server first!
-      let serverRoom: any = null;
-      try {
-        const sRes = await fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/state?t=${Date.now()}`, { cache: 'no-store' });
-        if (sRes.ok) {
-          const sData = await sRes.json();
-          if (sData.success && sData.room) {
-            serverRoom = sData.room;
-          }
-        }
-      } catch (err) {
-        console.warn('Could not fetch server state before Drive save:', err);
-      }
-
-      // 2. Fetch existing Google Drive file if present to determine latest cloud version
-      let driveExistingData: any = null;
-      try {
-        const dRes = await loadCoupleDataFromDrive(token, settings.roomCode);
-        if (dRes.success && dRes.data) {
-          driveExistingData = dRes.data;
-        }
-      } catch (err) {
-        console.warn('Could not fetch existing Drive backup:', err);
-      }
-
-      // Determine timestamps
-      const serverTime = serverRoom?.updatedAt || serverRoom?.timestamp || 0;
-      const driveTime = driveExistingData?.updatedAt || driveExistingData?.timestamp || (driveExistingData?.savedAt ? new Date(driveExistingData.savedAt).getTime() : 0);
-
-      // Select the newer dataset as base source of truth
-      const isDriveNewer = driveTime > serverTime && driveExistingData;
-      const baseData = isDriveNewer ? driveExistingData : (serverRoom || driveExistingData || {});
-      const baseTime = Math.max(serverTime, driveTime);
-
-      const deletedIds = [
-        ...(serverRoom?.deletedItemIds || []),
-        ...(driveExistingData?.deletedItemIds || []),
-      ];
-
-      // Safely merge all collections: local items + remote server + remote drive items
-      const remoteDiaries = [
-        ...(serverRoom?.diaries || []),
-        ...(driveExistingData?.diaries || []),
-      ];
-      const mergedDiaries = smartMergeCollections<DiaryEntry>(diaries, remoteDiaries, deletedIds);
-      mergedDiaries.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
-
-      const remotePhotos = [
-        ...(serverRoom?.photos || []),
-        ...(driveExistingData?.photos || []),
-      ];
-      const mergedPhotos = smartMergeCollections<PhotoMemory>(photos, remotePhotos, deletedIds);
-      mergedPhotos.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
-
-      const remoteCards = [
-        ...(serverRoom?.cards || []),
-        ...(driveExistingData?.cards || []),
-      ];
-      const mergedCards = smartMergeCollections<HandwrittenCard>(cards, remoteCards, deletedIds);
-      mergedCards.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
-
-      const remoteAnniversaries = [
-        ...(serverRoom?.anniversaries || []),
-        ...(driveExistingData?.anniversaries || []),
-      ];
-      const mergedAnniversaries = smartMergeCollections<AnniversaryEvent>(anniversaries, remoteAnniversaries, deletedIds);
-
-      let currentPlaylist = roomPlaylist;
-      if (!currentPlaylist || currentPlaylist.length === 0 || !hasUserMutatedRef.current) {
-        currentPlaylist = baseData?.playlist || serverRoom?.playlist || driveExistingData?.playlist || [];
-      }
-
-      let currentAlbums: any[] = [];
-      try {
-        const aSaved = localStorage.getItem('lovesync_custom_albums_v2');
-        if (aSaved) currentAlbums = JSON.parse(aSaved);
-      } catch {}
-      if (!currentAlbums || currentAlbums.length === 0 || !hasUserMutatedRef.current) {
-        currentAlbums = baseData?.albums || serverRoom?.albums || driveExistingData?.albums || [];
-      }
-
-      const mergedSettings = {
-        ...settings,
-        ...(driveExistingData?.settings || {}),
-        ...(serverRoom?.settings || {}),
-        roomCode: settings.roomCode,
-      };
-
-      const nowTime = Date.now();
-      const fullData = {
-        myProfile,
-        partnerProfile: partnerProfile || serverRoom?.profiles?.[Object.keys(serverRoom?.profiles || {}).find((id) => id !== myUserId) || ''] || driveExistingData?.partnerProfile || null,
-        settings: mergedSettings,
-        diaries: mergedDiaries,
-        photos: mergedPhotos,
-        cards: mergedCards,
-        anniversaries: mergedAnniversaries,
-        playlist: currentPlaylist,
-        albums: currentAlbums,
-        deletedItemIds: deletedIds,
-        savedAt: new Date().toISOString(),
-        updatedAt: nowTime,
-      };
-
-      // 3. Save strictly freshest dataset to Google Drive
-      const result = await saveCoupleDataToDrive(token, settings.roomCode, fullData);
-      if (result.success) {
-        hasUserMutatedRef.current = false;
-        const timeStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        setGoogleDriveLastSavedAt(timeStr);
-        if (result.folderUrl) {
-          setGoogleDriveFolderUrl(result.folderUrl);
-          localStorage.setItem(`${STORAGE_KEY_PREFIX}gdrive_folder_url`, result.folderUrl);
-        }
-        localStorage.setItem(`${STORAGE_KEY_PREFIX}gdrive_last_saved`, timeStr);
-
-        // Update local React state and storage to reflect the freshest authoritative cloud data
-        setDiaries(mergedDiaries);
-        setPhotos(mergedPhotos);
-        setCards(mergedCards);
-        setAnniversaries(mergedAnniversaries);
-        try {
-          localStorage.setItem(`${STORAGE_KEY_PREFIX}diaries`, JSON.stringify(mergedDiaries));
-          localStorage.setItem(`${STORAGE_KEY_PREFIX}photos`, JSON.stringify(mergedPhotos));
-          localStorage.setItem(`${STORAGE_KEY_PREFIX}cards`, JSON.stringify(mergedCards));
-          localStorage.setItem(`${STORAGE_KEY_PREFIX}anniversaries`, JSON.stringify(mergedAnniversaries));
-        } catch {}
-
-        // Broadcast to server with replaceCollections: true so all devices are 100% in sync with Drive
-        try {
-          await fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/sync`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              userId: myUserId,
-              profile: myProfileRef.current,
-              state: {
-                ...fullData,
-                replaceCollections: true,
-              },
-            }),
-          });
-        } catch {}
-
-        // Sync Google Drive metadata to user account on server for cross-device visibility
-        saveGoogleDriveStatusService({
-          username: authSessionUser?.username,
-          roomCode: settings.roomCode,
-          gdriveConnected: true,
-          gdriveEmail: googleUser?.email || '',
-          gdriveDisplayName: googleUser?.displayName || '',
-          gdriveFolderUrl: result.folderUrl || googleDriveFolderUrl || '',
-          gdriveLastSaved: timeStr,
-        });
-
-        soundService.playSuccess();
-        return { success: true, folderUrl: result.folderUrl };
-      } else {
-        throw new Error(result.error || 'Lỗi khi lưu lên Google Drive.');
-      }
-    } catch (err: any) {
-      console.error('saveToGoogleDriveNow Error:', err);
-      soundService.playPop();
-      return { success: false, error: err.message || 'Lỗi lưu Google Drive' };
-    } finally {
-      setIsGoogleDriveSyncing(false);
-    }
-  }, [settings.roomCode, myUserId, myProfile, partnerProfile, settings, diaries, photos, cards, anniversaries, roomPlaylist, authSessionUser, googleUser, googleDriveFolderUrl]);
-
-  // Google Drive Manual Restore / Load
-  const loadFromGoogleDriveNow = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
-    try {
-      setIsGoogleDriveSyncing(true);
-      let token = await getAccessToken();
-      if (!token) {
-        const loginRes = await googleSignIn();
-        token = loginRes?.accessToken || null;
-      }
-      if (!token) {
-        return { success: false, error: 'Đăng nhập Google chưa hoàn tất hoặc đã bị hủy.' };
-      }
-
-      const result = await loadCoupleDataFromDrive(token, settings.roomCode);
-      if (result.success && result.data) {
-        hasUserMutatedRef.current = false;
-        const data = result.data;
-        if (data.myProfile) setMyProfileState(data.myProfile);
-        if (data.partnerProfile) setPartnerProfileState(data.partnerProfile);
-        if (data.settings) setSettingsState(data.settings);
-        if (Array.isArray(data.diaries)) {
-          setDiaries(data.diaries);
-          localStorage.setItem(`${STORAGE_KEY_PREFIX}diaries`, JSON.stringify(data.diaries));
-        }
-        if (Array.isArray(data.photos)) {
-          setPhotos(data.photos);
-          localStorage.setItem(`${STORAGE_KEY_PREFIX}photos`, JSON.stringify(data.photos));
-        }
-        if (Array.isArray(data.cards)) {
-          setCards(data.cards);
-          localStorage.setItem(`${STORAGE_KEY_PREFIX}cards`, JSON.stringify(data.cards));
-        }
-        if (Array.isArray(data.anniversaries)) {
-          setAnniversaries(data.anniversaries);
-          localStorage.setItem(`${STORAGE_KEY_PREFIX}anniversaries`, JSON.stringify(data.anniversaries));
-        }
-        if (Array.isArray(data.playlist) && data.playlist.length > 0) {
-          setRoomPlaylist(data.playlist);
-          localStorage.setItem('lovesync_full_playlist_v3', JSON.stringify(data.playlist));
-        }
-        if (Array.isArray(data.albums) && data.albums.length > 0) {
-          localStorage.setItem('lovesync_custom_albums_v2', JSON.stringify(data.albums));
-        }
-
-        // Broadcast to server with replaceCollections: true
-        try {
-          await fetch(`/api/room/${encodeURIComponent(settings.roomCode)}/sync`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              userId: myUserId,
-              profile: myProfileRef.current,
-              state: {
-                ...data,
-                replaceCollections: true,
-                roomCode: settings.roomCode,
-                updatedAt: Date.now(),
-              },
-            }),
-          });
-        } catch {}
-
-        soundService.playSuccess();
-        return { success: true };
-      } else {
-        throw new Error(result.error || 'Không tìm thấy dữ liệu sao lưu.');
-      }
-    } catch (err: any) {
-      soundService.playPop();
-      return { success: false, error: err.message || 'Lỗi tải từ Google Drive' };
-    } finally {
-      setIsGoogleDriveSyncing(false);
-    }
-  }, [settings.roomCode, myUserId]);
-
-  // Connect Google Drive
+  // Connect Google Drive — used exclusively to authorize photo uploads in the album (see
+  // PhotoAlbumView). No app data other than the uploaded image files ever goes to Drive.
   const connectGoogleDrive = useCallback(async (): Promise<boolean> => {
     try {
       setIsGoogleDriveSyncing(true);
@@ -1280,9 +895,15 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (res?.user && res.accessToken) {
         setGoogleUser(res.user);
         setIsGoogleDriveConnected(true);
-        // Automatically save latest merged data
-        const saveRes = await saveToGoogleDriveNow();
-        return saveRes.success;
+        try {
+          const folderId = await findOrCreateAppFolder(res.accessToken);
+          const folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
+          setGoogleDriveFolderUrl(folderUrl);
+          localStorage.setItem(`${STORAGE_KEY_PREFIX}gdrive_folder_url`, folderUrl);
+        } catch (err) {
+          console.warn('Could not resolve Google Drive folder URL:', err);
+        }
+        return true;
       }
       return false;
     } catch (err: any) {
@@ -1291,40 +912,14 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } finally {
       setIsGoogleDriveSyncing(false);
     }
-  }, [saveToGoogleDriveNow]);
+  }, []);
 
   // Disconnect Google Drive
   const disconnectGoogleDrive = useCallback(async () => {
     await googleLogout();
     setGoogleUser(null);
     setIsGoogleDriveConnected(false);
-    saveGoogleDriveStatusService({
-      username: authSessionUser?.username,
-      roomCode: settings.roomCode,
-      gdriveConnected: false,
-    });
-  }, [authSessionUser, settings.roomCode]);
-
-  // Debounced Auto-sync to Google Drive on actual user data mutations (when connected)
-  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
-  useEffect(() => {
-    if (!isGoogleDriveConnected) return;
-    // Only auto-save if user performed a mutation in this active session
-    if (!hasUserMutatedRef.current) return;
-
-    if (autoSaveTimerRef.current) {
-      clearTimeout(autoSaveTimerRef.current);
-    }
-
-    autoSaveTimerRef.current = setTimeout(async () => {
-      hasUserMutatedRef.current = false;
-      await saveToGoogleDriveNow();
-    }, 4000);
-
-    return () => {
-      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    };
-  }, [isGoogleDriveConnected, diaries, photos, cards, anniversaries, roomPlaylist, settings, saveToGoogleDriveNow]);
+  }, []);
 
   // Days-together counter. Deliberately coarse (ticks once a minute, not every second) — this
   // value lives in the shared app context, so a 1s interval here would re-render every screen of
@@ -2245,13 +1840,10 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         googleUser,
         isGoogleDriveConnected,
         isGoogleDriveSyncing,
-        googleDriveLastSavedAt,
         googleDriveFolderUrl,
         googleDriveFolderName: APP_FOLDER_NAME,
         connectGoogleDrive,
         disconnectGoogleDrive,
-        saveToGoogleDriveNow,
-        loadFromGoogleDriveNow,
         syncNow,
         setRoomCode,
         changeCoupleRoomCode,

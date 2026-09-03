@@ -783,27 +783,6 @@ export async function updateUserProfileOnServer(username: string, profile: any):
   return null;
 }
 
-// 12. Sync Google Drive Status to Backend User Account
-export async function saveGoogleDriveStatusService(params: {
-  username?: string;
-  roomCode?: string;
-  gdriveConnected: boolean;
-  gdriveEmail?: string;
-  gdriveDisplayName?: string;
-  gdriveFolderUrl?: string;
-  gdriveLastSaved?: string;
-}): Promise<void> {
-  try {
-    await fetch('/api/auth/gdrive-status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
-  } catch (e) {
-    console.warn('Could not save Google Drive status to server:', e);
-  }
-}
-
 // 12. Change Password without Old Password
 export async function changePasswordWithoutOld(
   username: string,
