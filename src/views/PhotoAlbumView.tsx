@@ -113,6 +113,7 @@ export const PhotoAlbumView: React.FC = () => {
     addPhotosBatch,
     deletePhoto,
     togglePhotoLike,
+    updatePhotoMeta,
     isGoogleDriveConnected,
     googleDriveFolderUrl,
     connectGoogleDrive,
@@ -548,14 +549,18 @@ export const PhotoAlbumView: React.FC = () => {
       newPhotosPayload.push({
         title: item.title.trim() || `Kỷ niệm ngọt ngào ${i + 1}`,
         caption: batchDefaultCaption.trim(),
-        imageUrl: item.url, // Original full-resolution image for instant crisp display
+        // Prefer the lightweight Google Drive URL once uploaded — keeps Firestore sync documents
+        // small and lets the partner's device load the photo too. Falls back to the local base64
+        // preview only when Drive isn't connected/upload failed (device-local only in that case).
+        imageUrl: driveData?.directUrl || item.url,
+        thumbnailUrl: driveData?.thumbnailUrl,
         date: batchDefaultDate,
         location: batchDefaultLocation.trim() || undefined,
         frameStyle: batchDefaultFrame,
         albumId: targetAlbum,
         albumName: targetAlbum,
         tags: [targetAlbum],
-        originalQuality: true,
+        originalQuality: !!driveData?.fileId,
         originalFileId: driveData?.fileId,
         driveFolderId: driveData?.folderId,
         driveViewUrl: driveData?.webViewLink,
@@ -611,6 +616,7 @@ export const PhotoAlbumView: React.FC = () => {
       for (let i = 0; i < unsynced.length; i++) {
         const photo = unsynced[i];
         const albumTarget = photo.albumName || photo.albumId || 'Khoảnh Khắc Hẹn Hò ☕';
+        setDriveScanFeedback(`Đang đồng bộ ảnh ${i + 1}/${unsynced.length} lên Google Drive...`);
         try {
           const driveData = await uploadDataUrlImageToDrive(
             token,
@@ -619,17 +625,26 @@ export const PhotoAlbumView: React.FC = () => {
             albumTarget
           );
           if (driveData?.fileId) {
-            photo.originalFileId = driveData.fileId;
-            photo.driveFolderId = driveData.folderId;
-            photo.driveViewUrl = driveData.webViewLink;
-            photo.driveDownloadUrl = driveData.downloadUrl;
-            photo.originalQuality = true;
+            // Swap the heavy local base64 imageUrl for the lightweight Drive URL and
+            // properly persist + broadcast it (a raw object mutation here would never
+            // reach localStorage, Firestore, or trigger a re-render).
+            updatePhotoMeta(photo.id, {
+              imageUrl: driveData.directUrl || photo.imageUrl,
+              thumbnailUrl: driveData.thumbnailUrl,
+              originalFileId: driveData.fileId,
+              driveFolderId: driveData.folderId,
+              driveViewUrl: driveData.webViewLink,
+              driveDownloadUrl: driveData.downloadUrl,
+              originalQuality: true,
+            });
           }
         } catch (err) {
           console.warn('Sync photo error:', err);
         }
       }
       soundService.playSuccess();
+      setDriveScanFeedback(`✓ Đã đồng bộ ${unsynced.length} ảnh lên Google Drive!`);
+      setTimeout(() => setDriveScanFeedback(null), 5000);
     } finally {
       setIsSyncingAllPhotos(false);
     }
@@ -1527,6 +1542,25 @@ export const PhotoAlbumView: React.FC = () => {
                     className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-100"
                   />
                 </div>
+
+                {/* Warning when Drive isn't connected: photos will stay local-only on this device */}
+                {!isGoogleDriveConnected && !isUploadingToDrive && (
+                  <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                    <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
+                      Chưa kết nối Google Drive: ảnh sẽ chỉ lưu tạm trên máy này, người yêu sẽ{' '}
+                      <strong>không thấy được</strong> ảnh này ở máy của họ. Bấm{' '}
+                      <button
+                        type="button"
+                        onClick={() => connectGoogleDrive()}
+                        className="underline font-bold hover:text-amber-900 dark:hover:text-amber-200"
+                      >
+                        Kết Nối Google Drive
+                      </button>{' '}
+                      trước khi tải ảnh lên để lưu vĩnh viễn và đồng bộ cho cả hai.
+                    </p>
+                  </div>
+                )}
 
                 {/* Upload Status & Progress */}
                 {isUploadingToDrive && (

@@ -3,6 +3,46 @@
  * All date displays across the application are normalized to DD/MM/YYYY
  */
 
+import { useEffect, useMemo, useState } from 'react';
+
+export interface LoveDuration {
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+}
+
+const ZERO_DURATION: LoveDuration = { days: 0, hours: 0, minutes: 0, seconds: 0 };
+
+/**
+ * Live-ticking "days/hours/minutes/seconds together" counter, self-contained per component.
+ * Runs its own 1s timer scoped to whichever component calls it — unlike sourcing this from
+ * shared app context, only that component re-renders every second, not the entire app tree.
+ */
+export function useLoveDuration(startDate?: string | null): LoveDuration {
+  const [now, setNow] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    if (!startDate || !startDate.trim()) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [startDate]);
+
+  return useMemo(() => {
+    if (!startDate || !startDate.trim()) return ZERO_DURATION;
+    const start = new Date(startDate).getTime();
+    if (isNaN(start)) return ZERO_DURATION;
+
+    const diff = Math.max(0, now - start);
+    return {
+      days: Math.floor(diff / (1000 * 60 * 60 * 24)),
+      hours: Math.floor((diff / (1000 * 60 * 60)) % 24),
+      minutes: Math.floor((diff / (1000 * 60)) % 60),
+      seconds: Math.floor((diff / 1000) % 60),
+    };
+  }, [startDate, now]);
+}
+
 export interface DateParts {
   day: number;
   month: number;

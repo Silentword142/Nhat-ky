@@ -23,7 +23,7 @@ import { AnniversaryEvent } from '../types';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { DEFAULT_AVATAR_ME, DEFAULT_AVATAR_PARTNER } from '../services/mockData';
-import { formatDateVN } from '../utils/date';
+import { formatDateVN, useLoveDuration } from '../utils/date';
 import { DateInputVN } from '../components/DateInputVN';
 
 const MILESTONES_TARGETS = [
@@ -52,13 +52,14 @@ export const AnniversaryView: React.FC = () => {
     myProfile,
     partnerProfile,
     daysInLove,
-    loveDuration,
     addAnniversary,
     deleteAnniversary,
     updateSettings,
   } = useCouple();
 
   const currentTheme = THEMES[settings.theme] || THEMES.sakura;
+  // Self-contained live seconds counter — only this view re-renders every second while open.
+  const loveDuration = useLoveDuration(settings.coupleStartDate);
 
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);

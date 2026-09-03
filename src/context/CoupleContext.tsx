@@ -72,7 +72,6 @@ export interface CoupleContextType {
   syncStatus: 'connected' | 'connecting' | 'offline';
   lastSyncedAt: number | null;
   daysInLove: number;
-  loveDuration: { days: number; hours: number; minutes: number; seconds: number };
   partnerAccountInfo: { username?: string; displayName?: string; birthday?: string } | null;
 
   // Google Drive Cloud Storage (Dedicated Folder)
@@ -109,6 +108,7 @@ export interface CoupleContextType {
   addPhotosBatch: (photosList: Array<Omit<PhotoMemory, 'id' | 'createdAt' | 'authorId' | 'authorName' | 'likes'>>) => void;
   deletePhoto: (id: string) => void;
   togglePhotoLike: (photoId: string) => void;
+  updatePhotoMeta: (photoId: string, updates: Partial<PhotoMemory>) => void;
 
   sendHandwrittenCard: (card: Omit<HandwrittenCard, 'id' | 'sentAt' | 'senderId' | 'senderName' | 'isOpened'>) => void;
   openCard: (cardId: string) => void;
@@ -130,6 +130,33 @@ export interface CoupleContextType {
 export const CoupleContext = createContext<CoupleContextType | undefined>(undefined);
 
 const STORAGE_KEY_PREFIX = 'lovesync_cloud_v2_';
+
+// Firestore documents are capped at 1MiB. Inline base64 image/canvas data (data: URLs) from
+// unsynced local photos or handwritten cards can blow past that instantly and silently break
+// realtime sync for the *entire* room (Firestore rejects the whole write). This strips any long
+// inline data: URL out of the payload right before it is sent to Firestore — the full-quality
+// version keeps living in localStorage on this device and, once uploaded to Google Drive, the
+// lightweight Drive URL takes its place and syncs normally.
+const MAX_INLINE_DATA_URL_LENGTH = 2000;
+function stripHeavyInlineDataForCloudSync<T>(value: T): T {
+  if (typeof value === 'string') {
+    if (value.startsWith('data:') && value.length > MAX_INLINE_DATA_URL_LENGTH) {
+      return '' as unknown as T;
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => stripHeavyInlineDataForCloudSync(item)) as unknown as T;
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, any> = {};
+    for (const key of Object.keys(value as Record<string, any>)) {
+      out[key] = stripHeavyInlineDataForCloudSync((value as Record<string, any>)[key]);
+    }
+    return out as T;
+  }
+  return value;
+}
 
 // Robust helper to extract timestamp from any item (date string, timestamp, createdAt, updatedAt, etc.)
 export function getItemTimestamp(item: any): number {
@@ -769,7 +796,8 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       try {
         if (cleanRoom) {
           const roomDocRef = doc(db, 'rooms', cleanRoom);
-          setDoc(roomDocRef, payload, { merge: true }).catch(() => {});
+          const firestoreSafePayload = stripHeavyInlineDataForCloudSync(payload);
+          setDoc(roomDocRef, firestoreSafePayload, { merge: true }).catch(() => {});
           setSyncStatus('connected');
           setLastSyncedAt(nowTime);
         }
@@ -832,32 +860,50 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       console.warn('[Firestore] Init notice:', e);
     }
 
-    // 2. Express REST Polling fallback (if running fullstack backend)
+    // 2. Express REST Polling fallback (only relevant when running the fullstack Node server —
+    // on static hosting like GitHub Pages this endpoint never exists, so stop polling it after a
+    // few consecutive failures instead of hitting a 404 every 3s forever. Firestore realtime sync
+    // above already covers GitHub Pages / static hosting on its own.
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 3;
+    let interval: ReturnType<typeof setInterval> | null = null;
+
     const fetchServerState = async () => {
       try {
         const res = await fetch(`/api/room/${encodeURIComponent(cleanRoom)}/state?t=${Date.now()}`, {
           cache: 'no-store',
         });
-        if (!res.ok) return;
-        const data = await res.json().catch(() => null);
-        if (isMounted && data && data.success) {
-          if (data.exists && data.room) {
-            applyIncomingRoomData(data.room, 'express_rest');
-          } else {
-            setIsPartnerOnline(false);
-            setIsPartnerTyping(false);
+        if (!res.ok) {
+          consecutiveFailures++;
+        } else {
+          consecutiveFailures = 0;
+          const data = await res.json().catch(() => null);
+          if (isMounted && data && data.success) {
+            if (data.exists && data.room) {
+              applyIncomingRoomData(data.room, 'express_rest');
+            } else {
+              setIsPartnerOnline(false);
+              setIsPartnerTyping(false);
+            }
           }
         }
-      } catch (err) {}
+      } catch (err) {
+        consecutiveFailures++;
+      }
+
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES && interval) {
+        clearInterval(interval);
+        interval = null;
+      }
     };
 
     fetchServerState();
-    const interval = setInterval(fetchServerState, 3000);
+    interval = setInterval(fetchServerState, 3000);
 
     return () => {
       isMounted = false;
       if (unsubscribeFirestore) unsubscribeFirestore();
-      clearInterval(interval);
+      if (interval) clearInterval(interval);
     };
   }, [isAuthenticated, settings.roomCode, applyIncomingRoomData]);
 
@@ -906,7 +952,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         try {
           await setDoc(
             doc(db, 'rooms', cleanRoom),
-            { ...backup, roomCode: cleanRoom, updatedAt: Date.now() },
+            stripHeavyInlineDataForCloudSync({ ...backup, roomCode: cleanRoom, updatedAt: Date.now() }),
             { merge: true }
           );
         } catch {}
@@ -1280,33 +1326,23 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   }, [isGoogleDriveConnected, diaries, photos, cards, anniversaries, roomPlaylist, settings, saveToGoogleDriveNow]);
 
-  // Live timer for anniversary countdown
-  const [now, setNow] = useState<Date>(new Date());
+  // Days-together counter. Deliberately coarse (ticks once a minute, not every second) — this
+  // value lives in the shared app context, so a 1s interval here would re-render every screen of
+  // the app every second. Components that need a live seconds-ticking countdown (Header,
+  // AnniversaryView) use the self-contained `useLoveDuration` hook instead, which only re-renders
+  // that one component each second.
+  const [dayTick, setDayTick] = useState<number>(() => Date.now());
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000);
+    const timer = setInterval(() => setDayTick(Date.now()), 5 * 60 * 1000);
     return () => clearInterval(timer);
   }, []);
 
-  const loveDuration = useMemo(() => {
-    if (!settings.coupleStartDate || !settings.coupleStartDate.trim()) {
-      return { days: 0, hours: 0, minutes: 0, seconds: 0 };
-    }
+  const daysInLove = useMemo(() => {
+    if (!settings.coupleStartDate || !settings.coupleStartDate.trim()) return 0;
     const start = new Date(settings.coupleStartDate).getTime();
-    if (isNaN(start)) {
-      return { days: 0, hours: 0, minutes: 0, seconds: 0 };
-    }
-    const current = now.getTime();
-    const diff = Math.max(0, current - start);
-
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
-    const minutes = Math.floor((diff / (1000 * 60)) % 60);
-    const seconds = Math.floor((diff / 1000) % 60);
-
-    return { days, hours, minutes, seconds };
-  }, [settings.coupleStartDate, now]);
-
-  const daysInLove = loveDuration.days;
+    if (isNaN(start)) return 0;
+    return Math.floor(Math.max(0, dayTick - start) / (1000 * 60 * 60 * 24));
+  }, [settings.coupleStartDate, dayTick]);
 
   // Sound toggle
   useEffect(() => {
@@ -1857,6 +1893,24 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     [myUserId, broadcastRoomChanges]
   );
 
+  // Patch a photo's metadata in place (used after uploading a locally-stored photo to
+  // Google Drive, to swap its heavy base64 imageUrl for the lightweight Drive URL and
+  // properly persist/broadcast the change — unlike a raw object mutation, this actually
+  // updates React state, localStorage, and Firestore).
+  const updatePhotoMeta = useCallback(
+    (photoId: string, updates: Partial<PhotoMemory>) => {
+      setPhotos((prev) => {
+        const next = prev.map((p) => (p.id === photoId ? { ...p, ...updates } : p));
+        try {
+          localStorage.setItem(`${STORAGE_KEY_PREFIX}photos`, JSON.stringify(next));
+        } catch {}
+        broadcastRoomChanges({ photos: next });
+        return next;
+      });
+    },
+    [broadcastRoomChanges]
+  );
+
   // Handwritten Cards
   const sendHandwrittenCard = useCallback(
     (card: Omit<HandwrittenCard, 'id' | 'sentAt' | 'senderId' | 'senderName' | 'isOpened'>) => {
@@ -2187,7 +2241,6 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         syncStatus,
         lastSyncedAt,
         daysInLove,
-        loveDuration,
         partnerAccountInfo,
         googleUser,
         isGoogleDriveConnected,
@@ -2217,6 +2270,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         addPhotosBatch,
         deletePhoto,
         togglePhotoLike,
+        updatePhotoMeta,
         sendHandwrittenCard,
         openCard,
         deleteCard,

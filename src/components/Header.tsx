@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Heart, Moon, Sun, Lock, Palette, Radio, Send, Sparkles, Wifi, WifiOff, ShieldCheck, Cloud, RefreshCw, MonitorDown, X, CheckCircle2, ChevronRight, Camera, UserCheck, LogIn, UserPlus } from 'lucide-react';
 import { useCouple } from '../context/CoupleContext';
 import { THEMES } from '../utils/theme';
+import { useLoveDuration } from '../utils/date';
 import { soundService } from '../services/sound';
 import { ProfileModal } from './ProfileModal';
 import { PartnerProfileModal } from './PartnerProfileModal';
@@ -14,7 +15,6 @@ export const Header: React.FC = () => {
     partnerProfile,
     settings,
     daysInLove,
-    loveDuration,
     isPartnerOnline,
     syncStatus,
     sendHeartbeat,
@@ -36,6 +36,9 @@ export const Header: React.FC = () => {
   const [customPulseMsg, setCustomPulseMsg] = useState('');
 
   const currentTheme = THEMES[settings.theme] || THEMES.sakura;
+  // Self-contained live seconds counter — only this component re-renders every second,
+  // instead of the whole app via shared context.
+  const loveDuration = useLoveDuration(settings.coupleStartDate);
 
   useEffect(() => {
     // Check if already in standalone mode
