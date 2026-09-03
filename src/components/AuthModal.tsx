@@ -200,12 +200,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
         saveToGoogleDriveNow().catch(() => {});
       }
 
-      setSuccessMsg('Đăng ký & lưu trữ dữ liệu tài khoản thành công! 💖✨');
-      setTimeout(() => {
+      if (user.cloudSyncFailed) {
         setSuccessMsg(null);
+        setErrorMsg(
+          `Đã tạo tài khoản trên máy này, nhưng KHÔNG lưu được lên đám mây (mất mạng hoặc lỗi kết nối). Bạn sẽ không đăng nhập được từ máy/trình duyệt khác cho tới khi đăng ký lại tài khoản này lúc có mạng ổn định.`
+        );
         setIsLoading(false);
-        onClose();
-      }, 1000);
+      } else {
+        setSuccessMsg('Đăng ký & lưu trữ dữ liệu tài khoản thành công! 💖✨');
+        setTimeout(() => {
+          setSuccessMsg(null);
+          setIsLoading(false);
+          onClose();
+        }, 1000);
+      }
     } catch (err: any) {
       console.error('Register error:', err);
       setIsLoading(false);

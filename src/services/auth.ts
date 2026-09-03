@@ -31,6 +31,9 @@ export interface UserAccountData {
   gdriveFolderUrl?: string;
   gdriveLastSaved?: string;
   createdAt?: number;
+  // True if this account was created locally but the cloud (Firestore) write failed — it will
+  // not be discoverable from any other device/browser until a successful sync happens.
+  cloudSyncFailed?: boolean;
 }
 
 export interface StoredAccountRecord extends UserAccountData {
@@ -111,9 +114,25 @@ export async function registerAccount(
   }
 
   const effectiveDisplayName = displayName && displayName.trim() ? displayName.trim() : cleanUsername;
-  const assignedRoom = roomCode && roomCode.trim() 
-    ? roomCode.trim().toUpperCase() 
+  const assignedRoom = roomCode && roomCode.trim()
+    ? roomCode.trim().toUpperCase()
     : `ROOM-${cleanUsername.toUpperCase()}`;
+
+  // 0. Check Firestore first — this is the source of truth on static hosting (GitHub Pages).
+  // Without this check, registering an already-taken username here would silently overwrite
+  // that other person's password (setDoc with merge only merges fields, it doesn't protect
+  // existing ones like passwordHash).
+  try {
+    const existingCloudUser = await getDoc(doc(db, 'users', cleanUsername));
+    if (existingCloudUser.exists()) {
+      throw new Error(`Tên tài khoản "${username.trim()}" đã được đăng ký trên hệ thống. Bạn hãy chọn tên khác hoặc chuyển sang tab Đăng Nhập nhé.`);
+    }
+  } catch (err: any) {
+    if (err.message && err.message.includes('đã được đăng ký')) {
+      throw err;
+    }
+    console.warn('[Firestore Auth] Could not check existing account (offline?):', err);
+  }
 
   // 1. Submit to Backend Server first so the account exists for ALL devices
   let serverUser: any = null;
@@ -165,10 +184,13 @@ export async function registerAccount(
     createdAt: Date.now(),
   };
 
-  // 2. Save to Firestore cloud database for static host (GitHub Pages) cross-device sync
+  // 2. Save to Firestore cloud database for static host (GitHub Pages) cross-device sync.
+  // Awaited (not fire-and-forget) so we know for certain whether it actually reached the cloud —
+  // an account that only ever saved locally can never be found again from another device.
+  let cloudSaveSucceeded = false;
   try {
     const userDocRef = doc(db, 'users', cleanUsername);
-    setDoc(
+    await setDoc(
       userDocRef,
       {
         ...newUserData,
@@ -176,7 +198,8 @@ export async function registerAccount(
         updatedAt: Date.now(),
       },
       { merge: true }
-    ).catch(() => {});
+    );
+    cloudSaveSucceeded = true;
   } catch (e) {
     console.warn('[Firestore Auth] Save user error:', e);
   }
@@ -192,6 +215,13 @@ export async function registerAccount(
 
   // Set active session in browser
   localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(newUserData));
+
+  // Registration still succeeds locally either way (don't block the user) — but if the cloud
+  // write failed, flag it so the UI can warn them: this account will NOT be reachable from any
+  // other device/browser until it actually syncs.
+  if (!cloudSaveSucceeded) {
+    newUserData.cloudSyncFailed = true;
+  }
 
   return newUserData;
 }
@@ -778,6 +808,8 @@ export async function changePasswordWithoutOld(
     throw new Error('Mật khẩu mới cần tối thiểu 4 ký tự.');
   }
 
+  let foundSomewhere = false;
+
   // 1. Call server endpoint if available
   try {
     const res = await fetch('/api/auth/change-password', {
@@ -792,7 +824,7 @@ export async function changePasswordWithoutOld(
     if (res.ok) {
       const data = await res.json().catch(() => null);
       if (data && data.success) {
-        // Updated on server
+        foundSomewhere = true;
       }
     } else {
       const data = await res.json().catch(() => null);
@@ -806,12 +838,30 @@ export async function changePasswordWithoutOld(
     }
   }
 
-  // 2. Update local web accounts cache
+  // 2. Update Firestore — the actual source of truth on static hosting (GitHub Pages). Without
+  // this, a password change here would never be visible to a login attempt from another device.
+  try {
+    const userDocRef = doc(db, 'users', cleanUsername);
+    const cloudUser = await getDoc(userDocRef);
+    if (cloudUser.exists()) {
+      await setDoc(userDocRef, { passwordHash: hashPassword(cleanPass), updatedAt: Date.now() }, { merge: true });
+      foundSomewhere = true;
+    }
+  } catch (err) {
+    console.warn('[Firestore Auth] Change password error:', err);
+  }
+
+  // 3. Update local web accounts cache
   const webAccounts = getStoredWebAccounts();
   if (webAccounts[cleanUsername]) {
     webAccounts[cleanUsername].passwordHash = hashPassword(cleanPass);
     webAccounts[cleanUsername].updatedAt = Date.now();
     saveStoredWebAccounts(webAccounts);
+    foundSomewhere = true;
+  }
+
+  if (!foundSomewhere) {
+    throw new Error(`Không tìm thấy tài khoản "${cleanUsername}" ở đâu cả (không trên máy này, không trên đám mây). Vui lòng kiểm tra lại tên tài khoản hoặc đăng ký tài khoản mới.`);
   }
 
   return {
