@@ -21,6 +21,8 @@ export const Header: React.FC = () => {
     updateSettings,
     isGoogleDriveConnected,
     googleDriveLastSavedAt,
+    isGoogleDriveSyncing,
+    connectGoogleDrive,
   } = useCouple();
 
   const [showHeartMenu, setShowHeartMenu] = useState(false);
@@ -122,18 +124,34 @@ export const Header: React.FC = () => {
               <span>Phòng: {settings.roomCode}</span>
             </div>
 
-            {/* Google Drive Status Badge */}
-            <div
-              className={`hidden lg:inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-medium text-[11px] ${
+            {/* Google Drive Status Badge (click to connect instantly when not yet linked) */}
+            <button
+              type="button"
+              onClick={() => {
+                if (isGoogleDriveConnected || isGoogleDriveSyncing) return;
+                soundService.playPop();
+                connectGoogleDrive().catch(() => {});
+              }}
+              className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-medium text-[11px] transition ${
                 isGoogleDriveConnected
-                  ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/40'
-                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
+                  ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/40 cursor-default'
+                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 hover:bg-blue-50 dark:hover:bg-blue-950/40 hover:text-blue-600 dark:hover:text-blue-400 cursor-pointer active:scale-95'
               }`}
-              title={isGoogleDriveConnected ? `Google Drive đã kết nối (Lưu lúc ${googleDriveLastSavedAt || 'gần đây'})` : 'Chưa kết nối Google Drive'}
+              title={
+                isGoogleDriveConnected
+                  ? `Google Drive đã kết nối (Lưu lúc ${googleDriveLastSavedAt || 'gần đây'})`
+                  : 'Bấm để kết nối và tự động sao lưu dữ liệu lên Google Drive'
+              }
             >
               <span>📁</span>
-              <span>{isGoogleDriveConnected ? `Google Drive: Đã lưu` : 'Google Drive: Chưa bật'}</span>
-            </div>
+              <span>
+                {isGoogleDriveSyncing
+                  ? 'Đang kết nối...'
+                  : isGoogleDriveConnected
+                  ? 'Google Drive: Đã lưu'
+                  : 'Google Drive: Bấm để bật'}
+              </span>
+            </button>
           </div>
 
           {/* Controls: Theme & Dark Mode */}

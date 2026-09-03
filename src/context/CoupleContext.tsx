@@ -861,6 +861,67 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   }, [isAuthenticated, settings.roomCode, applyIncomingRoomData]);
 
+  // Auto-restore from Google Drive backup if the cloud room turns out empty/new
+  // (e.g. Firestore data was wiped, or this device/room never received the couple's data yet).
+  // Runs at most once per session, never overwrites a room that already has content, and never
+  // prompts a sign-in popup — it only uses an already-cached Drive session.
+  const hasAttemptedDriveAutoRestoreRef = useRef(false);
+  useEffect(() => {
+    if (!isAuthenticated || !settings.roomCode || !isGoogleDriveConnected) return;
+    if (hasAttemptedDriveAutoRestoreRef.current) return;
+
+    const cleanRoom = settings.roomCode.toUpperCase().trim();
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const roomSnap = await getDoc(doc(db, 'rooms', cleanRoom));
+        const roomData = roomSnap.exists() ? roomSnap.data() : null;
+        const isRoomEmpty =
+          !roomData ||
+          ((!Array.isArray(roomData.diaries) || roomData.diaries.length === 0) &&
+            (!Array.isArray(roomData.photos) || roomData.photos.length === 0) &&
+            (!Array.isArray(roomData.cards) || roomData.cards.length === 0));
+
+        if (!isRoomEmpty || cancelled) return;
+
+        // Only use an already-cached Drive session (never trigger a sign-in popup here)
+        const token = await getAccessToken();
+        if (!token || cancelled) return;
+
+        const result = await loadCoupleDataFromDrive(token, cleanRoom);
+        if (cancelled || !result.success || !result.data) return;
+
+        const backup = result.data;
+        const backupHasContent =
+          (Array.isArray(backup.diaries) && backup.diaries.length > 0) ||
+          (Array.isArray(backup.photos) && backup.photos.length > 0) ||
+          (Array.isArray(backup.cards) && backup.cards.length > 0);
+        if (!backupHasContent) return;
+
+        console.log('[GDrive] Cloud room was empty, restoring from Google Drive backup...');
+        applyIncomingRoomData(backup, 'gdrive_auto_restore');
+
+        // Re-publish the restored backup to Firestore so the partner's device picks it up too
+        try {
+          await setDoc(
+            doc(db, 'rooms', cleanRoom),
+            { ...backup, roomCode: cleanRoom, updatedAt: Date.now() },
+            { merge: true }
+          );
+        } catch {}
+      } catch (err) {
+        console.warn('[GDrive] Auto-restore check failed:', err);
+      } finally {
+        hasAttemptedDriveAutoRestoreRef.current = true;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, settings.roomCode, isGoogleDriveConnected, applyIncomingRoomData]);
+
   // Heartbeat presence ping (sent to Firestore & Express Server)
   useEffect(() => {
     if (!isAuthenticated || !settings.roomCode || settings.roomCode.trim().length === 0) {
