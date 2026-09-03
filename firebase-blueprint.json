@@ -1,0 +1,56 @@
+{
+  "entities": {
+    "CoupleRoom": {
+      "title": "CoupleRoom",
+      "description": "Real-time room state storing diaries, photos, letters, anniversaries and live status for a couple",
+      "type": "object",
+      "properties": {
+        "roomCode": {
+          "type": "string",
+          "description": "Unique pairing room code (e.g. LOVE-2026)"
+        },
+        "diaries": {
+          "type": "array",
+          "description": "List of shared diary entries written by either partner"
+        },
+        "photos": {
+          "type": "array",
+          "description": "List of shared photo memories"
+        },
+        "cards": {
+          "type": "array",
+          "description": "List of handwritten cards and letters"
+        },
+        "anniversaries": {
+          "type": "array",
+          "description": "List of couple anniversary dates"
+        },
+        "settings": {
+          "type": "object",
+          "description": "Couple shared settings"
+        },
+        "profiles": {
+          "type": "object",
+          "description": "Map of user profile by user id"
+        },
+        "lastActivePulse": {
+          "type": "object",
+          "description": "Latest heartbeat tap or love pulse"
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Timestamp of last modification"
+        }
+      },
+      "required": ["roomCode", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomCode}": {
+      "schema": {
+        "$ref": "#/entities/CoupleRoom"
+      },
+      "description": "Shared couple room document identified by room code"
+    }
+  }
+}

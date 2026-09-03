@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <title>LoveSync - Nhật Ký Cặp Đôi</title>
+    <script>
+      // Single Page Apps for GitHub Pages redirect
+      var l = window.location;
+      var repoPath = l.pathname.split('/')[1] || '';
+      // If deployed at username.github.io/repo-name/
+      var isSubPath = repoPath && !repoPath.includes('.') && repoPath !== 'index.html';
+      var basePath = isSubPath ? '/' + repoPath : '';
+      
+      l.replace(
+        l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
+        basePath + '/?p=/' +
+        l.pathname.slice(basePath.length + 1).replace(/&/g, '~and~') +
+        (l.search ? '&q=' + l.search.slice(1).replace(/&/g, '~and~') : '') +
+        l.hash
+      );
+    </script>
+  </head>
+  <body>
+    <p>Đang chuyển hướng...</p>
+  </body>
+</html>

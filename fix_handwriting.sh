@@ -1,0 +1,1 @@
+sed -i 's/font-family: '\''Mali'\'', '\''Itim'\'', '\''Playpen Sans'\'', '\''Pangolin'\'', '\''Be Vietnam Pro'\'', cursive, sans-serif;/font-family: '\''Caveat'\'', '\''Dancing Script'\'', '\''Playpen Sans'\'', '\''Be Vietnam Pro'\'', cursive, sans-serif;/g' src/index.css

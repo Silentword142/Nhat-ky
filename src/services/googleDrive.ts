@@ -1,0 +1,1139 @@
+/**
+ * Google Drive Storage & Synchronization Service for LoveSync
+ * Replaces Firestore by saving all couple data (Diaries, Photos, Cards, Anniversaries, Settings)
+ * directly into a dedicated private folder in the user's Google Drive.
+ */
+
+import { CoupleFullState, PhotoMemory } from '../types';
+
+export const APP_FOLDER_NAME = '📁 LoveSync - Nhật Ký & Kỷ Niệm Tình Yêu';
+export const PHOTOS_ROOT_FOLDER_NAME = '📷 Album Ảnh & Kỷ Niệm (Photos)';
+export const MASTER_ACCOUNTS_FILE_NAME = 'lovesync_accounts_vault.json';
+
+export const CUSTOM_PHOTOS_FOLDER_ID_KEY = 'LOVESYNC_CUSTOM_PHOTOS_FOLDER_ID';
+export const CUSTOM_PHOTOS_FOLDER_NAME_KEY = 'LOVESYNC_CUSTOM_PHOTOS_FOLDER_NAME';
+export const CUSTOM_PHOTOS_FOLDER_URL_KEY = 'LOVESYNC_CUSTOM_PHOTOS_FOLDER_URL';
+
+/**
+ * Extracts Google Drive Folder ID from a full Drive URL or a raw ID string
+ * Supports:
+ * - https://drive.google.com/drive/folders/1ABCxyz...
+ * - https://drive.google.com/drive/u/0/folders/1ABCxyz...
+ * - https://drive.google.com/open?id=1ABCxyz...
+ * - Raw ID string
+ */
+export function extractDriveFolderId(input: string): string {
+  if (!input) return '';
+  const trimmed = input.trim();
+
+  // Match /folders/ID
+  const foldersMatch = trimmed.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (foldersMatch && foldersMatch[1]) {
+    return foldersMatch[1];
+  }
+
+  // Match id=ID
+  const idMatch = trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (idMatch && idMatch[1]) {
+    return idMatch[1];
+  }
+
+  // If already pure ID string (Google Drive IDs are usually 25-45 characters long)
+  const cleanId = trimmed.replace(/[^a-zA-Z0-9_-]/g, '');
+  return cleanId;
+}
+
+/**
+ * Get custom photos folder stored in local storage
+ */
+export function getCustomPhotosFolder(): { id: string; name?: string; url: string } | null {
+  if (typeof window === 'undefined') return null;
+  const id = localStorage.getItem(CUSTOM_PHOTOS_FOLDER_ID_KEY)?.trim();
+  if (!id) return null;
+  const name = localStorage.getItem(CUSTOM_PHOTOS_FOLDER_NAME_KEY)?.trim() || undefined;
+  const url = localStorage.getItem(CUSTOM_PHOTOS_FOLDER_URL_KEY)?.trim() || `https://drive.google.com/drive/folders/${id}`;
+  return { id, name, url };
+}
+
+/**
+ * Set custom photos folder to point photo uploads & scans to a user-chosen folder
+ */
+export function setCustomPhotosFolder(idOrUrl: string, name?: string): { id: string; name?: string; url: string } | null {
+  if (typeof window === 'undefined') return null;
+  const folderId = extractDriveFolderId(idOrUrl);
+  if (!folderId) {
+    clearCustomPhotosFolder();
+    return null;
+  }
+  const url = `https://drive.google.com/drive/folders/${folderId}`;
+  localStorage.setItem(CUSTOM_PHOTOS_FOLDER_ID_KEY, folderId);
+  localStorage.setItem(CUSTOM_PHOTOS_FOLDER_URL_KEY, url);
+  if (name) {
+    localStorage.setItem(CUSTOM_PHOTOS_FOLDER_NAME_KEY, name.trim());
+  }
+  return { id: folderId, name: name?.trim(), url };
+}
+
+/**
+ * Clear custom photos folder (revert to default LoveSync folder)
+ */
+export function clearCustomPhotosFolder(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(CUSTOM_PHOTOS_FOLDER_ID_KEY);
+  localStorage.removeItem(CUSTOM_PHOTOS_FOLDER_NAME_KEY);
+  localStorage.removeItem(CUSTOM_PHOTOS_FOLDER_URL_KEY);
+}
+
+/**
+ * Query Drive folder details (Name, link, trashed status) to verify folder existence & permissions
+ */
+export async function getFolderDetails(
+  accessToken: string,
+  folderId: string
+): Promise<{ id: string; name: string; webViewLink?: string } | null> {
+  try {
+    const cleanId = extractDriveFolderId(folderId);
+    if (!cleanId) return null;
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${cleanId}?fields=id,name,mimeType,webViewLink,trashed`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.trashed || data.mimeType !== 'application/vnd.google-apps.folder') return null;
+    return {
+      id: data.id,
+      name: data.name,
+      webViewLink: data.webViewLink || `https://drive.google.com/drive/folders/${data.id}`,
+    };
+  } catch (err) {
+    console.warn('getFolderDetails error:', err);
+    return null;
+  }
+}
+
+export interface DriveBackupInfo {
+  id: string;
+  name: string;
+  mimeType: string;
+  modifiedTime: string;
+  size?: string;
+  webViewLink?: string;
+}
+
+export interface DriveSyncResult {
+  success: boolean;
+  fileId?: string;
+  folderId?: string;
+  folderUrl?: string;
+  modifiedTime?: string;
+  error?: string;
+}
+
+export interface DrivePhotoUploadResult {
+  success: boolean;
+  fileId?: string;
+  directUrl?: string;
+  thumbnailUrl?: string;
+  webViewLink?: string;
+  downloadUrl?: string;
+  folderId?: string;
+  folderUrl?: string;
+  albumName?: string;
+  fileName?: string;
+  fileSize?: number;
+  mimeType?: string;
+  error?: string;
+}
+
+/**
+ * Find or create the dedicated LoveSync root folder in user's Google Drive
+ */
+export async function findOrCreateAppFolder(accessToken: string): Promise<string> {
+  const query = `name = '${APP_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id, name, webViewLink)&spaces=drive`;
+
+  const searchRes = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!searchRes.ok) {
+    const errText = await searchRes.text();
+    if (errText.includes('insufficient') || errText.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT')) {
+      throw new Error('Chưa cấp quyền Google Drive. Vui lòng kết nối lại và cấp quyền truy cập Google Drive.');
+    }
+    if (errText.includes('API has not been used') || errText.includes('has not been enabled')) {
+      throw new Error('Chưa kích hoạt Google Drive API trên Google Cloud.');
+    }
+    throw new Error(`Không thể tìm kiếm thư mục Google Drive: ${errText}`);
+  }
+
+  const searchData = await searchRes.json();
+  if (searchData.files && searchData.files.length > 0) {
+    return searchData.files[0].id;
+  }
+
+  // Create folder if it doesn't exist
+  const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name: APP_FOLDER_NAME,
+      mimeType: 'application/vnd.google-apps.folder',
+      description: 'Thư mục riêng lưu trữ vĩnh viễn toàn bộ dữ liệu LoveSync (Tài khoản, Nhật ký, Album Ảnh gốc, Thư tay, Danh sách nhạc)',
+    }),
+  });
+
+  if (!createRes.ok) {
+    const errText = await createRes.text();
+    throw new Error(`Không thể tạo thư mục Google Drive: ${errText}`);
+  }
+
+  const folderData = await createRes.json();
+  return folderData.id;
+}
+
+/**
+ * Find or create the Photos root folder inside LoveSync app directory
+ */
+export async function findOrCreatePhotosFolder(accessToken: string, appFolderId?: string): Promise<string> {
+  // Check if a custom photos folder has been set by the user
+  const custom = getCustomPhotosFolder();
+  if (custom && custom.id) {
+    const verified = await getFolderDetails(accessToken, custom.id);
+    if (verified && verified.id) {
+      return verified.id;
+    }
+  }
+
+  const parentId = appFolderId || (await findOrCreateAppFolder(accessToken));
+  const query = `name = '${PHOTOS_ROOT_FOLDER_NAME}' and '${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id, name)&spaces=drive`;
+
+  const searchRes = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (searchRes.ok) {
+    const data = await searchRes.json();
+    if (data.files && data.files.length > 0) {
+      return data.files[0].id;
+    }
+  }
+
+  // Create Photos root folder
+  const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name: PHOTOS_ROOT_FOLDER_NAME,
+      mimeType: 'application/vnd.google-apps.folder',
+      parents: [parentId],
+      description: 'Thư mục lưu trữ tất cả Album ảnh kỷ niệm cặp đôi chất lượng gốc',
+    }),
+  });
+
+  if (!createRes.ok) {
+    const err = await createRes.text();
+    throw new Error(`Không thể tạo thư mục Album Ảnh: ${err}`);
+  }
+
+  const created = await createRes.json();
+  return created.id;
+}
+
+/**
+ * Find or create an Album subfolder inside the Photos folder (named after the Album)
+ */
+export async function findOrCreateAlbumFolder(
+  accessToken: string,
+  albumName: string,
+  photosFolderId?: string
+): Promise<{ folderId: string; folderUrl: string }> {
+  const cleanAlbumName = (albumName || 'Album Chung').trim();
+  const parentPhotosId = photosFolderId || (await findOrCreatePhotosFolder(accessToken));
+
+  // Escape single quotes for drive query
+  const safeQueryName = cleanAlbumName.replace(/'/g, "\\'");
+  const query = `name = '${safeQueryName}' and '${parentPhotosId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id, name, webViewLink)&spaces=drive`;
+
+  const searchRes = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (searchRes.ok) {
+    const data = await searchRes.json();
+    if (data.files && data.files.length > 0) {
+      const f = data.files[0];
+      return {
+        folderId: f.id,
+        folderUrl: f.webViewLink || `https://drive.google.com/drive/folders/${f.id}`,
+      };
+    }
+  }
+
+  // Create Album subfolder
+  const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name: cleanAlbumName,
+      mimeType: 'application/vnd.google-apps.folder',
+      parents: [parentPhotosId],
+      description: `Album ảnh kỷ niệm: ${cleanAlbumName} - Lưu chất lượng gốc`,
+    }),
+  });
+
+  if (!createRes.ok) {
+    const err = await createRes.text();
+    throw new Error(`Không thể tạo thư mục album "${cleanAlbumName}": ${err}`);
+  }
+
+  const created = await createRes.json();
+  return {
+    folderId: created.id,
+    folderUrl: created.webViewLink || `https://drive.google.com/drive/folders/${created.id}`,
+  };
+}
+
+/**
+ * In-memory cache for resolved authenticated image blob URLs
+ */
+export const driveBlobCache = new Map<string, string>();
+
+/**
+ * Fetch and return an authenticated blob URL for a Google Drive file ID
+ */
+export async function getAuthenticatedDriveImageUrl(
+  accessToken: string,
+  fileId: string
+): Promise<string | null> {
+  if (!fileId) return null;
+  if (driveBlobCache.has(fileId)) {
+    return driveBlobCache.get(fileId)!;
+  }
+
+  try {
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!res.ok) {
+      return null;
+    }
+
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    driveBlobCache.set(fileId, objectUrl);
+    return objectUrl;
+  } catch (err) {
+    console.warn(`Failed to fetch authenticated Drive blob for ${fileId}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Make a Google Drive file accessible for web viewing (anyone with link can view)
+ */
+export async function makeDriveFilePublic(accessToken: string, fileId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        role: 'reader',
+        type: 'anyone',
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Upload an original image file to its dedicated album subfolder in Google Drive
+ * Saves at 100% original quality with no compression loss and pristine binary preservation!
+ */
+export async function uploadOriginalImageToDrive(
+  accessToken: string,
+  fileOrBlob: File | Blob,
+  fileName: string,
+  albumName: string
+): Promise<DrivePhotoUploadResult> {
+  try {
+    // 1. Find or create the album subfolder
+    const { folderId, folderUrl } = await findOrCreateAlbumFolder(accessToken, albumName);
+
+    // 2. Prepare file binary data
+    const arrayBuffer = await fileOrBlob.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    const mimeType = fileOrBlob.type || 'image/jpeg';
+    const cleanFileName = fileName || `photo_${Date.now()}_original.jpg`;
+
+    // 3. Construct multipart upload request using raw binary Blob (prevents UTF-8 encoding distortion)
+    const boundary = '-------LoveSyncPhotoUploadBoundary' + Math.random().toString(36).substring(2);
+    const delimiter = `\r\n--${boundary}\r\n`;
+    const closeDelimiter = `\r\n--${boundary}--`;
+
+    const metadata = {
+      name: cleanFileName,
+      mimeType: mimeType,
+      parents: [folderId],
+      description: `Ảnh kỷ niệm album "${albumName}" - Đăng tải chất lượng gốc`,
+    };
+
+    const metadataPart = new TextEncoder().encode(
+      delimiter +
+        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+        JSON.stringify(metadata) +
+        delimiter +
+        `Content-Type: ${mimeType}\r\n\r\n`
+    );
+    const closePart = new TextEncoder().encode(closeDelimiter);
+
+    // Combined multipart body with exact pristine binary byte array
+    const multipartBody = new Blob([metadataPart, bytes, closePart], {
+      type: `multipart/related; boundary=${boundary}`,
+    });
+
+    const uploadUrl =
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,size,webViewLink,webContentLink,thumbnailLink';
+
+    const uploadRes = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body: multipartBody,
+    });
+
+    if (!uploadRes.ok) {
+      const errText = await uploadRes.text();
+      throw new Error(`Lỗi tải ảnh lên Google Drive: ${errText}`);
+    }
+
+    const uploadedData = await uploadRes.json();
+    const fileId = uploadedData.id;
+
+    // 4. Set permission to allow reading in web app
+    await makeDriveFilePublic(accessToken, fileId);
+
+    // Cache the original blob in memory for instant high-speed rendering
+    try {
+      const localBlobUrl = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+      driveBlobCache.set(fileId, localBlobUrl);
+    } catch {}
+
+    // Direct high-quality view links:
+    const directUrl = `https://drive.google.com/thumbnail?id=${fileId}&sz=w2560`;
+    const thumbnailUrl = uploadedData.thumbnailLink || `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`;
+    const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+    const webViewLink = uploadedData.webViewLink || `https://drive.google.com/file/d/${fileId}/view`;
+
+    return {
+      success: true,
+      fileId,
+      directUrl,
+      thumbnailUrl,
+      webViewLink,
+      downloadUrl,
+      folderId,
+      folderUrl,
+      albumName,
+      fileName: cleanFileName,
+      fileSize: fileOrBlob.size,
+      mimeType,
+    };
+  } catch (err: any) {
+    console.error('uploadOriginalImageToDrive Error:', err);
+    return {
+      success: false,
+      error: err.message || 'Lỗi không xác định khi lưu ảnh lên Google Drive',
+    };
+  }
+}
+
+/**
+ * Upload an image from base64 Data URL to Google Drive at original quality
+ */
+export async function uploadDataUrlImageToDrive(
+  accessToken: string,
+  dataUrl: string,
+  fileName: string,
+  albumName: string
+): Promise<DrivePhotoUploadResult> {
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    return await uploadOriginalImageToDrive(accessToken, blob, fileName, albumName);
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err.message || 'Không thể chuyển đổi data URL sang Google Drive.',
+    };
+  }
+}
+
+export interface DriveScannedFolder {
+  id: string;
+  name: string;
+  driveFolderId: string;
+  driveFolderUrl: string;
+  parentFolderId?: string;
+  parentFolderName?: string;
+  subfolders?: Array<{ id: string; name: string; driveFolderId: string; photoCount?: number }>;
+  photos: PhotoMemory[];
+  photoCount: number;
+  coverImage?: string;
+  createdAt: number;
+  modifiedAt: number;
+}
+
+export interface DriveScanResult {
+  success: boolean;
+  folders: DriveScannedFolder[];
+  photos: PhotoMemory[];
+  photosFolderId?: string;
+  photosFolderUrl?: string;
+  totalPhotosCount: number;
+  totalFoldersCount: number;
+  error?: string;
+}
+
+/**
+ * Deeply scan Google Drive to discover all folders, nested subfolders, and photos uploaded directly or via app
+ */
+export async function scanGoogleDriveFoldersAndPhotos(
+  accessToken: string,
+  currentUserId?: string,
+  currentUserName?: string
+): Promise<DriveScanResult> {
+  try {
+    const appFolderId = await findOrCreateAppFolder(accessToken);
+    const photosFolderId = await findOrCreatePhotosFolder(accessToken, appFolderId);
+    const photosFolderUrl = `https://drive.google.com/drive/folders/${photosFolderId}`;
+
+    const authorId = currentUserId || 'user_drive';
+    const authorName = currentUserName || 'Google Drive';
+
+    // Helper: Query subfolders of a given parent folder with full pagination
+    async function getSubfoldersOf(parentId: string): Promise<Array<{ id: string; name: string; webViewLink?: string; createdTime?: string; modifiedTime?: string }>> {
+      const allFolders: Array<{ id: string; name: string; webViewLink?: string; createdTime?: string; modifiedTime?: string }> = [];
+      let pageToken: string | undefined = undefined;
+      const q = `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+      const fields = 'nextPageToken, files(id, name, webViewLink, createdTime, modifiedTime)';
+
+      do {
+        let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&orderBy=name&pageSize=1000&spaces=drive`;
+        if (pageToken) {
+          url += `&pageToken=${encodeURIComponent(pageToken)}`;
+        }
+        try {
+          const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+          if (!res.ok) break;
+          const data = await res.json();
+          if (data.files && Array.isArray(data.files)) {
+            allFolders.push(...data.files);
+          }
+          pageToken = data.nextPageToken;
+        } catch (err) {
+          console.warn(`Error fetching subfolders for ${parentId}:`, err);
+          break;
+        }
+      } while (pageToken);
+
+      return allFolders;
+    }
+
+    // Helper: Query image files of a given parent folder with full pagination (handles 2000+ photos)
+    async function getImagesOf(
+      parentId: string,
+      albumId: string,
+      albumName: string,
+      subfolderName?: string
+    ): Promise<PhotoMemory[]> {
+      const allFiles: any[] = [];
+      let pageToken: string | undefined = undefined;
+      const q = `'${parentId}' in parents and mimeType contains 'image/' and trashed = false`;
+      const fields = 'nextPageToken, files(id, name, mimeType, size, webViewLink, webContentLink, thumbnailLink, createdTime, modifiedTime, imageMediaMetadata)';
+
+      do {
+        let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&orderBy=createdTime desc&pageSize=1000&spaces=drive`;
+        if (pageToken) {
+          url += `&pageToken=${encodeURIComponent(pageToken)}`;
+        }
+        try {
+          const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+          if (!res.ok) {
+            console.warn(`Fetch images failed for folder ${parentId}:`, res.statusText);
+            break;
+          }
+          const data = await res.json();
+          if (data.files && Array.isArray(data.files)) {
+            allFiles.push(...data.files);
+          }
+          pageToken = data.nextPageToken;
+        } catch (err) {
+          console.warn(`Error fetching page of images for ${parentId}:`, err);
+          break;
+        }
+      } while (pageToken);
+
+      return allFiles.map((file: any) => {
+        const createdMs = file.createdTime ? new Date(file.createdTime).getTime() : Date.now();
+        const dateStr = file.createdTime ? file.createdTime.split('T')[0] : new Date().toISOString().split('T')[0];
+        const directUrl = `https://drive.google.com/thumbnail?id=${file.id}&sz=w2560`;
+        const thumbnailUrl = `https://drive.google.com/thumbnail?id=${file.id}&sz=w500`;
+        const driveViewUrl = file.webViewLink || `https://drive.google.com/file/d/${file.id}/view`;
+        const driveDownloadUrl = `https://drive.google.com/uc?export=download&id=${file.id}`;
+
+        return {
+          id: `drive_photo_${file.id}`,
+          albumId,
+          albumName,
+          title: file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
+          caption: subfolderName ? `Thư mục con: ${subfolderName}` : `Từ thư mục Google Drive "${albumName}"`,
+          imageUrl: directUrl,
+          thumbnailUrl,
+          originalFileId: file.id,
+          driveFolderId: parentId,
+          driveViewUrl,
+          driveDownloadUrl,
+          originalQuality: true,
+          fileSize: file.size ? Number(file.size) : undefined,
+          fileName: file.name,
+          date: dateStr,
+          frameStyle: 'classic' as const,
+          authorId,
+          authorName,
+          likes: [],
+          tags: ['Google Drive', albumName],
+          createdAt: createdMs,
+          subfolderName,
+        };
+      });
+    }
+
+    // 1. Get all 1st level folders inside Photos root folder
+    const level1Folders = await getSubfoldersOf(photosFolderId);
+
+    // 2. Also check if user created any custom photo folders directly in App root folder (excluding standard system files)
+    const appLevelFolders = await getSubfoldersOf(appFolderId);
+    const extraAppFolders = appLevelFolders.filter(
+      (f) => f.id !== photosFolderId && !f.name.startsWith('.')
+    );
+
+    const allMainFolders = [...level1Folders, ...extraAppFolders];
+
+    const scannedFolders: DriveScannedFolder[] = [];
+    const allCollectedPhotos: PhotoMemory[] = [];
+
+    // Process each main folder
+    for (const folder of allMainFolders) {
+      // Find sub-subfolders (e.g. "Đà Lạt -> Ngày 1", "Đà Lạt -> Ngày 2")
+      const childSubfolders = await getSubfoldersOf(folder.id);
+
+      // Photos directly in this folder
+      const directPhotos = await getImagesOf(folder.id, folder.id, folder.name);
+      const folderAllPhotos: PhotoMemory[] = [...directPhotos];
+
+      const subfolderMetaList: Array<{ id: string; name: string; driveFolderId: string; photoCount?: number }> = [];
+
+      // Photos inside each child subfolder
+      for (const child of childSubfolders) {
+        const childPhotos = await getImagesOf(child.id, folder.id, folder.name, child.name);
+        subfolderMetaList.push({
+          id: child.id,
+          name: child.name,
+          driveFolderId: child.id,
+          photoCount: childPhotos.length,
+        });
+        folderAllPhotos.push(...childPhotos);
+      }
+
+      const coverPhoto = folderAllPhotos.length > 0 ? folderAllPhotos[0].imageUrl : undefined;
+
+      scannedFolders.push({
+        id: folder.id,
+        name: folder.name,
+        driveFolderId: folder.id,
+        driveFolderUrl: folder.webViewLink || `https://drive.google.com/drive/folders/${folder.id}`,
+        photos: folderAllPhotos,
+        photoCount: folderAllPhotos.length,
+        subfolders: subfolderMetaList,
+        coverImage: coverPhoto,
+        createdAt: folder.createdTime ? new Date(folder.createdTime).getTime() : Date.now(),
+        modifiedAt: folder.modifiedTime ? new Date(folder.modifiedTime).getTime() : Date.now(),
+      });
+
+      allCollectedPhotos.push(...folderAllPhotos);
+    }
+
+    // 3. Also check if there are any loose photos placed directly in the Photos root / custom folder
+    const customFolder = getCustomPhotosFolder();
+    const rootDisplayName = customFolder?.name || 'Ảnh Chung Trên Drive';
+    const rootLoosePhotos = await getImagesOf(photosFolderId, 'root_photos', rootDisplayName);
+    if (rootLoosePhotos.length > 0) {
+      scannedFolders.push({
+        id: 'root_photos',
+        name: rootDisplayName,
+        driveFolderId: photosFolderId,
+        driveFolderUrl: photosFolderUrl,
+        photos: rootLoosePhotos,
+        photoCount: rootLoosePhotos.length,
+        coverImage: rootLoosePhotos[0]?.imageUrl,
+        createdAt: Date.now(),
+        modifiedAt: Date.now(),
+      });
+      allCollectedPhotos.push(...rootLoosePhotos);
+    }
+
+    return {
+      success: true,
+      folders: scannedFolders,
+      photos: allCollectedPhotos,
+      photosFolderId,
+      photosFolderUrl,
+      totalPhotosCount: allCollectedPhotos.length,
+      totalFoldersCount: scannedFolders.length,
+    };
+  } catch (err: any) {
+    console.error('scanGoogleDriveFoldersAndPhotos Error:', err);
+    return {
+      success: false,
+      folders: [],
+      photos: [],
+      totalPhotosCount: 0,
+      totalFoldersCount: 0,
+      error: err.message || 'Lỗi khi quét thư mục trên Google Drive.',
+    };
+  }
+}
+
+/**
+ * Save user accounts registry into Google Drive
+ */
+export async function saveAccountsVaultToDrive(accessToken: string, accounts: Record<string, any>): Promise<DriveSyncResult> {
+  try {
+    const folderId = await findOrCreateAppFolder(accessToken);
+    const searchFileQuery = `name = '${MASTER_ACCOUNTS_FILE_NAME}' and '${folderId}' in parents and trashed = false`;
+    const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(searchFileQuery)}&fields=files(id, name)&spaces=drive`;
+
+    const searchRes = await fetch(searchUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    const searchData = searchRes.ok ? await searchRes.json() : { files: [] };
+    const existingFile = searchData.files && searchData.files.length > 0 ? searchData.files[0] : null;
+
+    const fileContent = JSON.stringify(
+      {
+        accounts,
+        savedAt: new Date().toISOString(),
+        timestamp: Date.now(),
+        appVersion: '2.0.0-gdrive',
+      },
+      null,
+      2
+    );
+
+    const boundary = '-------314159265358979323846';
+    const delimiter = `\r\n--${boundary}\r\n`;
+    const closeDelimiter = `\r\n--${boundary}--`;
+
+    let uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime,webViewLink';
+    let method = 'POST';
+
+    const metadata: Record<string, any> = {
+      name: MASTER_ACCOUNTS_FILE_NAME,
+      mimeType: 'application/json',
+      description: `Danh sách tài khoản LoveSync - Cập nhật lúc ${new Date().toLocaleString('vi-VN')}`,
+    };
+
+    if (existingFile) {
+      uploadUrl = `https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=multipart&fields=id,name,modifiedTime,webViewLink`;
+      method = 'PATCH';
+    } else {
+      metadata.parents = [folderId];
+    }
+
+    const multipartRequestBody =
+      delimiter +
+      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+      JSON.stringify(metadata) +
+      delimiter +
+      'Content-Type: application/json\r\n\r\n' +
+      fileContent +
+      closeDelimiter;
+
+    const uploadRes = await fetch(uploadUrl, {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body: multipartRequestBody,
+    });
+
+    if (!uploadRes.ok) {
+      const errText = await uploadRes.text();
+      throw new Error(`Lỗi khi lưu tài khoản lên Google Drive: ${errText}`);
+    }
+
+    const resultData = await uploadRes.json();
+    return {
+      success: true,
+      fileId: resultData.id,
+      folderId,
+      folderUrl: `https://drive.google.com/drive/folders/${folderId}`,
+      modifiedTime: resultData.modifiedTime || new Date().toISOString(),
+    };
+  } catch (err: any) {
+    console.error('saveAccountsVaultToDrive Error:', err);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Load user accounts registry from Google Drive
+ */
+export async function loadAccountsVaultFromDrive(accessToken: string): Promise<{ success: boolean; accounts?: Record<string, any>; error?: string }> {
+  try {
+    const folderId = await findOrCreateAppFolder(accessToken);
+    const searchFileQuery = `name = '${MASTER_ACCOUNTS_FILE_NAME}' and '${folderId}' in parents and trashed = false`;
+    const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(searchFileQuery)}&fields=files(id, name, modifiedTime)&spaces=drive`;
+
+    const searchRes = await fetch(searchUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!searchRes.ok) {
+      return { success: false, error: 'Không thể truy cập tệp tài khoản trên Google Drive.' };
+    }
+
+    const searchData = await searchRes.json();
+    if (!searchData.files || searchData.files.length === 0) {
+      return { success: false, accounts: {} };
+    }
+
+    const file = searchData.files[0];
+    const downloadRes = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!downloadRes.ok) {
+      return { success: false, accounts: {} };
+    }
+
+    const parsed = await downloadRes.json();
+    return {
+      success: true,
+      accounts: parsed.accounts || parsed || {},
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Save complete Couple Data to a JSON file inside the dedicated Google Drive folder
+ */
+export async function saveCoupleDataToDrive(
+  accessToken: string,
+  roomCode: string,
+  fullData: Partial<CoupleFullState> & Record<string, any>
+): Promise<DriveSyncResult> {
+  try {
+    const cleanRoomCode = (roomCode || 'DEFAULT').toUpperCase().trim();
+    const folderId = await findOrCreateAppFolder(accessToken);
+    const fileName = `lovesync_data_${cleanRoomCode}.json`;
+
+    // 1. Check if the file already exists in the folder
+    const searchFileQuery = `name = '${fileName}' and '${folderId}' in parents and trashed = false`;
+    const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(searchFileQuery)}&fields=files(id, name)&spaces=drive`;
+
+    const searchRes = await fetch(searchUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    const searchData = searchRes.ok ? await searchRes.json() : { files: [] };
+    const existingFile = searchData.files && searchData.files.length > 0 ? searchData.files[0] : null;
+
+    const fileContent = JSON.stringify(
+      {
+        ...fullData,
+        roomCode: cleanRoomCode,
+        savedAt: new Date().toISOString(),
+        timestamp: Date.now(),
+        appVersion: '2.0.0-gdrive',
+      },
+      null,
+      2
+    );
+
+    const boundary = '-------314159265358979323846';
+    const delimiter = `\r\n--${boundary}\r\n`;
+    const closeDelimiter = `\r\n--${boundary}--`;
+
+    let uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime,webViewLink';
+    let method = 'POST';
+
+    const metadata: Record<string, any> = {
+      name: fileName,
+      mimeType: 'application/json',
+      description: `Dữ liệu sao lưu tình yêu phòng ${cleanRoomCode} - Lưu lúc ${new Date().toLocaleString('vi-VN')}`,
+    };
+
+    if (existingFile) {
+      // Update existing file
+      uploadUrl = `https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=multipart&fields=id,name,modifiedTime,webViewLink`;
+      method = 'PATCH';
+    } else {
+      metadata.parents = [folderId];
+    }
+
+    const multipartRequestBody =
+      delimiter +
+      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+      JSON.stringify(metadata) +
+      delimiter +
+      'Content-Type: application/json\r\n\r\n' +
+      fileContent +
+      closeDelimiter;
+
+    const uploadRes = await fetch(uploadUrl, {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body: multipartRequestBody,
+    });
+
+    if (!uploadRes.ok) {
+      const errText = await uploadRes.text();
+      throw new Error(`Lỗi khi lưu dữ liệu lên Google Drive: ${errText}`);
+    }
+
+    const resultData = await uploadRes.json();
+
+    // Auto-save human-readable Diary book to Google Drive if diaries exist
+    if (Array.isArray(fullData.diaries) && fullData.diaries.length > 0) {
+      saveDiariesFormattedBookToDrive(accessToken, cleanRoomCode, fullData.diaries).catch((e) =>
+        console.warn('Silent saveDiariesFormattedBookToDrive warning:', e)
+      );
+    }
+
+    return {
+      success: true,
+      fileId: resultData.id,
+      folderId,
+      folderUrl: `https://drive.google.com/drive/folders/${folderId}`,
+      modifiedTime: resultData.modifiedTime || new Date().toISOString(),
+    };
+  } catch (err: any) {
+    console.error('saveCoupleDataToDrive Error:', err);
+    return {
+      success: false,
+      error: err.message || 'Lỗi không xác định khi lưu vào Google Drive.',
+    };
+  }
+}
+
+/**
+ * Load / Restore Couple Data from Google Drive dedicated folder
+ */
+export async function loadCoupleDataFromDrive(
+  accessToken: string,
+  roomCode: string
+): Promise<{ success: boolean; data?: any; modifiedTime?: string; error?: string }> {
+  try {
+    const cleanRoomCode = (roomCode || 'DEFAULT').toUpperCase().trim();
+    const folderId = await findOrCreateAppFolder(accessToken);
+    const fileName = `lovesync_data_${cleanRoomCode}.json`;
+
+    // Search for file
+    const searchFileQuery = `name = '${fileName}' and '${folderId}' in parents and trashed = false`;
+    const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(searchFileQuery)}&fields=files(id, name, modifiedTime)&spaces=drive`;
+
+    const searchRes = await fetch(searchUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!searchRes.ok) {
+      throw new Error('Không thể tìm tệp dữ liệu trên Google Drive.');
+    }
+
+    const searchData = await searchRes.json();
+    if (!searchData.files || searchData.files.length === 0) {
+      return {
+        success: false,
+        error: `Chưa tìm thấy tệp sao lưu "${fileName}" trong thư mục Google Drive của bạn.`,
+      };
+    }
+
+    const file = searchData.files[0];
+    const downloadUrl = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`;
+
+    const downloadRes = await fetch(downloadUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!downloadRes.ok) {
+      throw new Error('Không thể tải nội dung tệp từ Google Drive.');
+    }
+
+    const parsedData = await downloadRes.json();
+    return {
+      success: true,
+      data: parsedData,
+      modifiedTime: file.modifiedTime,
+    };
+  } catch (err: any) {
+    console.error('loadCoupleDataFromDrive Error:', err);
+    return {
+      success: false,
+      error: err.message || 'Lỗi khi đọc dữ liệu từ Google Drive.',
+    };
+  }
+}
+
+/**
+ * List all backup files in user's LoveSync folder on Google Drive
+ */
+export async function listDriveBackups(accessToken: string): Promise<DriveBackupInfo[]> {
+  try {
+    const folderId = await findOrCreateAppFolder(accessToken);
+    const query = `'${folderId}' in parents and trashed = false`;
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id, name, mimeType, modifiedTime, size, webViewLink)&orderBy=modifiedTime desc`;
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.files || [];
+  } catch (err) {
+    console.error('listDriveBackups Error:', err);
+    return [];
+  }
+}
+
+/**
+ * Save / Update a human-readable Diary book (.txt) in Google Drive
+ * Allows couple to read all their memories directly inside Google Drive anytime!
+ */
+export async function saveDiariesFormattedBookToDrive(
+  accessToken: string,
+  roomCode: string,
+  diaries: Array<any>
+): Promise<boolean> {
+  try {
+    const cleanRoomCode = (roomCode || 'DEFAULT').toUpperCase().trim();
+    const folderId = await findOrCreateAppFolder(accessToken);
+    const fileName = `Nhat_Ky_Tinh_Yeu_${cleanRoomCode}.txt`;
+
+    // Format readable diary text
+    const sortedDiaries = [...diaries].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+    let textContent = `========================================================================\n`;
+    textContent += `💖 CUỐN SỔ NHẬT KÝ TÌNH YÊU - LOVESYNC 💖\n`;
+    textContent += `Mã phòng chung đôi: ${cleanRoomCode}\n`;
+    textContent += `Ngày cập nhật sao lưu: ${new Date().toLocaleString('vi-VN')}\n`;
+    textContent += `Tổng số trang nhật ký: ${sortedDiaries.length} trang kỷ niệm\n`;
+    textContent += `========================================================================\n\n`;
+
+    sortedDiaries.forEach((d, idx) => {
+      textContent += `------------------------------------------------------------------------\n`;
+      textContent += `📖 TRANG ${idx + 1}: ${d.date ? new Date(d.date).toLocaleDateString('vi-VN') : 'Không rõ ngày'}\n`;
+      if (d.authorName) textContent += `✍️ Tác giả: ${d.authorName}\n`;
+      if (d.title) textContent += `📌 Tiêu đề: ${d.title}\n`;
+      if (d.mood) textContent += `😊 Tâm trạng: ${d.mood}\n`;
+      if (d.weather) textContent += `☀️ Thời tiết: ${d.weather}\n`;
+      if (d.location) textContent += `📍 Địa điểm: ${d.location}\n`;
+      textContent += `\n📝 NỘI DUNG:\n${d.content || '(Không có nội dung)'}\n`;
+      if (Array.isArray(d.photos) && d.photos.length > 0) {
+        textContent += `\n📸 Ảnh đính kèm (${d.photos.length} ảnh):\n`;
+        d.photos.forEach((p: string, pIdx: number) => {
+          textContent += `  [${pIdx + 1}] ${p}\n`;
+        });
+      }
+      textContent += `\n`;
+    });
+
+    textContent += `========================================================================\n`;
+    textContent += `Được đồng bộ tự động từ LoveSync - Giữ trọn từng khoảnh khắc yêu thương 💕\n`;
+    textContent += `========================================================================\n`;
+
+    // Search for existing file
+    const searchFileQuery = `name = '${fileName}' and '${folderId}' in parents and trashed = false`;
+    const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(searchFileQuery)}&fields=files(id, name)&spaces=drive`;
+
+    const searchRes = await fetch(searchUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    const searchData = searchRes.ok ? await searchRes.json() : { files: [] };
+    const existingFile = searchData.files && searchData.files.length > 0 ? searchData.files[0] : null;
+
+    const boundary = '-------DiaryBookBoundary' + Math.random().toString(36).substring(2);
+    const delimiter = `\r\n--${boundary}\r\n`;
+    const closeDelimiter = `\r\n--${boundary}--`;
+
+    let uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime';
+    let method = 'POST';
+
+    const metadata: Record<string, any> = {
+      name: fileName,
+      mimeType: 'text/plain',
+      description: `Sổ nhật ký tình yêu LoveSync phòng ${cleanRoomCode} - Đọc trực tiếp trên Drive`,
+    };
+
+    if (existingFile) {
+      uploadUrl = `https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=multipart&fields=id,name,modifiedTime`;
+      method = 'PATCH';
+    } else {
+      metadata.parents = [folderId];
+    }
+
+    const multipartRequestBody =
+      delimiter +
+      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+      JSON.stringify(metadata) +
+      delimiter +
+      'Content-Type: text/plain; charset=UTF-8\r\n\r\n' +
+      textContent +
+      closeDelimiter;
+
+    const uploadRes = await fetch(uploadUrl, {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body: multipartRequestBody,
+    });
+
+    return uploadRes.ok;
+  } catch (err) {
+    console.error('saveDiariesFormattedBookToDrive error:', err);
+    return false;
+  }
+}
