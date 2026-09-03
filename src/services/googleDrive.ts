@@ -742,9 +742,38 @@ export async function saveAccountsVaultToDrive(accessToken: string, accounts: Re
     const searchData = searchRes.ok ? await searchRes.json() : { files: [] };
     const existingFile = searchData.files && searchData.files.length > 0 ? searchData.files[0] : null;
 
+    // Merge with whatever is already on Drive instead of blindly overwriting it. This vault is
+    // shared across every device/browser that has ever connected this Google account — a device
+    // whose local cache only knows about *some* accounts (e.g. a fresh browser, or one that
+    // hasn't pulled the vault down yet) must never wipe out entries only the cloud copy knows
+    // about (this caused a real data-loss incident: registering on a fresh browser silently
+    // erased other accounts from the shared list).
+    let mergedAccounts: Record<string, any> = { ...accounts };
+    if (existingFile) {
+      try {
+        const existingRes = await fetch(`https://www.googleapis.com/drive/v3/files/${existingFile.id}?alt=media`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (existingRes.ok) {
+          const existingData = await existingRes.json();
+          const remoteAccounts = existingData?.accounts || {};
+          // Newer `updatedAt` wins per account; local `accounts` still wins ties/unknowns since
+          // it represents what the caller just actively changed.
+          mergedAccounts = { ...remoteAccounts, ...accounts };
+          for (const key of Object.keys(remoteAccounts)) {
+            if (accounts[key] && (remoteAccounts[key]?.updatedAt || 0) > (accounts[key]?.updatedAt || 0)) {
+              mergedAccounts[key] = remoteAccounts[key];
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('saveAccountsVaultToDrive: could not read existing vault to merge, proceeding with local copy only:', err);
+      }
+    }
+
     const fileContent = JSON.stringify(
       {
-        accounts,
+        accounts: mergedAccounts,
         savedAt: new Date().toISOString(),
         timestamp: Date.now(),
         appVersion: '2.0.0-gdrive',
