@@ -25,8 +25,9 @@ import {
   Search,
   GripVertical,
 } from 'lucide-react';
-import { useMusic, YOUTUBE_MUSIC_HUB, extractYouTubeId } from '../context/MusicContext';
+import { useMusic, YOUTUBE_MUSIC_HUB, extractYouTubeId, YT_PLAYER_TARGET_ID } from '../context/MusicContext';
 import { soundService } from '../services/sound';
+import { searchYouTubeVideos } from '../services/youtubeSearch';
 
 export const MusicPlayer: React.FC = () => {
   const {
@@ -99,23 +100,35 @@ export const MusicPlayer: React.FC = () => {
   const [fileAudioUrl, setFileAudioUrl] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
 
-  // Search YouTube API
-  const handleSearchYouTube = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!searchQuery.trim()) return;
+  // Search YouTube — this is a static site with no backend, so search runs directly against the
+  // YouTube Data API v3 from the browser using a key configured in Settings.
+  const [needsYtApiKey, setNeedsYtApiKey] = useState(false);
+  const handleSearchYouTube = async (e?: React.FormEvent | string) => {
+    // Called either as a form submit handler (React.FormEvent) or directly with an explicit
+    // query string (the quick-suggestion chips) — searchQuery's state update from setSearchQuery
+    // wouldn't be visible yet if we just read the state here right after setting it.
+    const explicitQuery = typeof e === 'string' ? e : undefined;
+    if (e && typeof e !== 'string') e.preventDefault();
+    const query = (explicitQuery ?? searchQuery).trim();
+    if (!query) return;
 
     soundService.playPop();
     setIsSearching(true);
     setSearchError(null);
+    setNeedsYtApiKey(false);
 
     try {
-      const res = await fetch(`/api/youtube/search?q=${encodeURIComponent(searchQuery.trim())}`);
-      const data = await res.json();
-      if (data.results && data.results.length > 0) {
-        setSearchResults(data.results);
+      const { results, error, needsApiKey } = await searchYouTubeVideos(query);
+      if (results.length > 0) {
+        setSearchResults(results);
       } else {
         setSearchResults([]);
-        setSearchError('Không tìm thấy bài hát. Bạn thử từ khóa khác hoặc dán link nhé.');
+        setNeedsYtApiKey(!!needsApiKey);
+        setSearchError(
+          needsApiKey
+            ? 'Chưa cấu hình YouTube API Key — vào Cài đặt để thêm Key miễn phí (mục "Cấu hình YouTube API Key").'
+            : error || 'Không tìm thấy bài hát. Bạn thử từ khóa khác hoặc dán link nhé.'
+        );
       }
     } catch (err) {
       console.error('Search YouTube error:', err);
@@ -401,20 +414,12 @@ export const MusicPlayer: React.FC = () => {
         )}
       </motion.div>
 
-      {/* Hidden/Active YouTube iframe player stream - persistent across pause/play */}
-      {currentTrack?.youtubeId && (
-        <div className="fixed -top-96 -left-96 w-10 h-10 opacity-0 pointer-events-none z-[-1] overflow-hidden">
-          <iframe
-            key={currentTrack.youtubeId}
-            id="lovesync_yt_stream"
-            width="200"
-            height="200"
-            src={`https://www.youtube-nocookie.com/embed/${currentTrack.youtubeId}?enablejsapi=1&version=3&autoplay=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
-            title="YouTube Player"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          />
-        </div>
-      )}
+      {/* Hidden persistent YouTube IFrame Player target — always rendered so MusicContext can
+          create the real YT.Player once on mount and just swap videos (loadVideoById) afterward,
+          instead of recreating a raw iframe per track that never actually answered commands. */}
+      <div className="fixed -top-96 -left-96 w-10 h-10 opacity-0 pointer-events-none z-[-1] overflow-hidden">
+        <div id={YT_PLAYER_TARGET_ID} />
+      </div>
 
       {/* ========================================================================= */}
       {/* 2. EXPANDED FULL-SCREEN MUSIC MODAL WITH YOUTUBE MUSIC HUB                */}
@@ -742,9 +747,7 @@ export const MusicPlayer: React.FC = () => {
                             type="button"
                             onClick={() => {
                               setSearchQuery(sug);
-                              fetch(`/api/youtube/search?q=${encodeURIComponent(sug)}`)
-                                .then(r => r.json())
-                                .then(d => d.results && setSearchResults(d.results));
+                              handleSearchYouTube(sug);
                             }}
                             className="px-2.5 py-1 rounded-full bg-rose-50 dark:bg-zinc-800 hover:bg-rose-100 text-[11px] text-rose-600 dark:text-rose-300 font-medium transition cursor-pointer"
                           >
@@ -755,8 +758,19 @@ export const MusicPlayer: React.FC = () => {
                     </form>
 
                     {searchError && (
-                      <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-300 border border-amber-200 text-xs font-bold">
+                      <div
+                        className={`p-3 rounded-2xl border text-xs font-bold ${
+                          needsYtApiKey
+                            ? 'bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-300 border-red-200 dark:border-red-900/50'
+                            : 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-300 border-amber-200'
+                        }`}
+                      >
                         {searchError}
+                        {needsYtApiKey && (
+                          <span className="block mt-1 font-normal text-[11px] opacity-90">
+                            Vào Cài đặt (⚙️) → mục "Cấu hình YouTube API Key" để lấy Key miễn phí trong ~2 phút.
+                          </span>
+                        )}
                       </div>
                     )}
 

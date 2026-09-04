@@ -38,7 +38,7 @@ import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { compressImageFile, CUTE_AVATARS } from '../utils/image';
 import { DEFAULT_AVATAR_ME, DEFAULT_AVATAR_PARTNER } from '../services/mockData';
-import { getOAuthClientId, setCustomOAuthClientId, DEFAULT_PROD_CLIENT_ID, getAccessToken, googleSignIn } from '../services/googleAuth';
+import { getOAuthClientId, setCustomOAuthClientId, DEFAULT_PROD_CLIENT_ID, getAccessToken, googleSignIn, getYouTubeApiKey, setCustomYouTubeApiKey } from '../services/googleAuth';
 import {
   getCustomPhotosFolder,
   setCustomPhotosFolder,
@@ -265,6 +265,28 @@ export const SettingsView: React.FC = () => {
     setCustomClientIdInput(DEFAULT_PROD_CLIENT_ID);
     setCustomOAuthClientId(DEFAULT_PROD_CLIENT_ID);
     setDriveActionNotice('Đã đặt lại Client ID mặc định!');
+    setTimeout(() => setDriveActionNotice(null), 4000);
+  };
+
+  // YouTube Data API v3 key — needed for in-app song search since this is a static site with no
+  // backend to proxy the request through.
+  const [customYouTubeKeyInput, setCustomYouTubeKeyInput] = useState(getYouTubeApiKey());
+  const [isSavedYouTubeKey, setIsSavedYouTubeKey] = useState(false);
+  const [showYouTubeKeySettings, setShowYouTubeKeySettings] = useState(false);
+
+  const handleSaveYouTubeApiKey = (e: React.FormEvent) => {
+    e.preventDefault();
+    setCustomYouTubeApiKey(customYouTubeKeyInput);
+    setIsSavedYouTubeKey(true);
+    setDriveActionNotice('Đã lưu YouTube API Key thành công! Thử tìm kiếm bài hát lại nhé 🎵');
+    setTimeout(() => setIsSavedYouTubeKey(false), 3000);
+    setTimeout(() => setDriveActionNotice(null), 5000);
+  };
+
+  const handleClearYouTubeApiKey = () => {
+    setCustomYouTubeKeyInput('');
+    setCustomYouTubeApiKey('');
+    setDriveActionNotice('Đã xóa YouTube API Key.');
     setTimeout(() => setDriveActionNotice(null), 4000);
   };
 
@@ -912,6 +934,86 @@ export const SettingsView: React.FC = () => {
                     >
                       <Check className="w-3.5 h-3.5" />
                       <span>{isSavedClientId ? 'Đã Lưu!' : 'Lưu Client ID'}</span>
+                    </button>
+                  </div>
+                </div>
+              </form>
+            )}
+          </div>
+
+          {/* YouTube Data API v3 Key — needed for in-app song search on a static site */}
+          <div className="mt-4 pt-3 border-t border-blue-100/80 dark:border-zinc-800">
+            <button
+              type="button"
+              onClick={() => setShowYouTubeKeySettings(!showYouTubeKeySettings)}
+              className="text-[11px] text-red-600 hover:text-red-700 dark:text-red-400 font-semibold font-cute flex items-center justify-between w-full p-2 rounded-xl hover:bg-red-50 dark:hover:bg-zinc-800/60 transition cursor-pointer"
+            >
+              <span className="flex items-center gap-1.5">
+                <span>🎵</span>
+                <span>Cấu hình YouTube API Key (Để Tìm Kiếm Bài Hát)</span>
+              </span>
+              <span className="text-xs">{showYouTubeKeySettings ? '▲ Thu gọn' : '▼ Mở rộng'}</span>
+            </button>
+
+            {showYouTubeKeySettings && (
+              <form onSubmit={handleSaveYouTubeApiKey} className="mt-3 p-4 rounded-2xl bg-white/95 dark:bg-zinc-800/95 border border-red-200 dark:border-zinc-700 space-y-3.5 text-xs shadow-xs">
+                <div>
+                  <label className="block text-[11px] font-bold text-zinc-700 dark:text-zinc-300 font-cute mb-1">
+                    YouTube Data API v3 Key:
+                  </label>
+                  <input
+                    type="text"
+                    value={customYouTubeKeyInput}
+                    onChange={(e) => setCustomYouTubeKeyInput(e.target.value)}
+                    placeholder="AIzaSy..."
+                    className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 focus:outline-hidden focus:ring-2 focus:ring-red-400"
+                  />
+                </div>
+
+                <div className="p-3 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 space-y-1.5 font-cute leading-relaxed">
+                  <div className="font-bold flex items-center gap-1 text-amber-800 dark:text-amber-300">
+                    <span>🛠️ Cách lấy Key miễn phí (mất khoảng 2 phút):</span>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 pl-1">
+                    <li>
+                      Mở <strong>Google Cloud Console</strong> → cùng project bạn đã dùng để tạo Google OAuth Client ID ở trên.
+                    </li>
+                    <li>
+                      Vào <strong>APIs & Services → Library</strong>, tìm <strong>"YouTube Data API v3"</strong> và bấm <strong>Enable</strong>.
+                    </li>
+                    <li>
+                      Vào <strong>APIs & Services → Credentials</strong> → <strong>+ CREATE CREDENTIALS → API key</strong>.
+                    </li>
+                    <li>
+                      (Khuyến nghị) Bấm vào Key vừa tạo → <strong>Application restrictions</strong> → chọn <strong>Websites</strong> → thêm tên miền web hiện tại của bạn để tránh bị người khác lấy trộm Key.
+                    </li>
+                    <li>
+                      Dán Key vào ô bên trên rồi bấm <strong>Lưu Key</strong>.
+                    </li>
+                  </ol>
+                  <div className="pt-1">
+                    Gói miễn phí cho phép khoảng 100 lượt tìm kiếm/ngày — đủ dùng cho một cặp đôi. Key này chỉ dùng để tìm kiếm bài hát, không có quyền truy cập dữ liệu cá nhân nào khác.
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
+                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-cute">
+                    💡 Bạn cũng có thể thiết lập biến <code className="font-mono text-red-600">VITE_YOUTUBE_API_KEY</code> lúc build.
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleClearYouTubeApiKey}
+                      className="px-3 py-1.5 text-[11px] text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-xl transition cursor-pointer"
+                    >
+                      Xóa Key
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-[11px] shadow-xs transition active:scale-95 cursor-pointer flex items-center gap-1"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>{isSavedYouTubeKey ? 'Đã Lưu!' : 'Lưu Key'}</span>
                     </button>
                   </div>
                 </div>

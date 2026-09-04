@@ -68,6 +68,11 @@ export const YOUTUBE_MUSIC_HUB: MusicTrack[] = [
   },
 ];
 
+// Only one direct-MP3 track is kept here — the other three previously hardcoded Pixabay CDN
+// links have gone dead (404) since they were first added; Pixabay download links aren't stable
+// long-term. The YouTube Music Hub tracks above are the reliable, actively-maintained default
+// catalog — a broken default track was a real, concrete cause of "trình phát nhạc không hoạt
+// động" for anyone whose player happened to land on one of them.
 export const DEFAULT_PLAYLIST: MusicTrack[] = [
   ...YOUTUBE_MUSIC_HUB,
   {
@@ -76,33 +81,6 @@ export const DEFAULT_PLAYLIST: MusicTrack[] = [
     artist: 'LoveSync Acoustic',
     url: 'https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3',
     coverImage: 'https://images.unsplash.com/photo-1518895949257-7621c3c786d7?w=200&auto=format&fit=crop&q=80',
-    source: 'audio',
-    isCustom: false,
-  },
-  {
-    id: 'track-2',
-    title: 'Khúc Dương Cầm Ngọt Ngào (Sweet Piano)',
-    artist: 'Love Ballads',
-    url: 'https://cdn.pixabay.com/download/audio/2022/10/14/audio_9939f77c30.mp3',
-    coverImage: 'https://images.unsplash.com/photo-1520523839898-50712825e3a7?w=200&auto=format&fit=crop&q=80',
-    source: 'audio',
-    isCustom: false,
-  },
-  {
-    id: 'track-3',
-    title: 'Mưa Chiều & Cafe Hẹn Hò',
-    artist: 'Cozy Moments',
-    url: 'https://cdn.pixabay.com/download/audio/2022/11/06/audio_2c55e94b21.mp3',
-    coverImage: 'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=200&auto=format&fit=crop&q=80',
-    source: 'audio',
-    isCustom: false,
-  },
-  {
-    id: 'track-4',
-    title: 'Hòa Âm Guitar Mộc Lãng Mạn',
-    artist: 'Acoustic Soul',
-    url: 'https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8bbfbffc9.mp3',
-    coverImage: 'https://images.unsplash.com/photo-1447752875215-b2761acb3c5d?w=200&auto=format&fit=crop&q=80',
     source: 'audio',
     isCustom: false,
   },
@@ -136,29 +114,40 @@ const MusicContext = createContext<MusicContextType | undefined>(undefined);
 
 const STORAGE_KEY_PLAYLIST = 'lovesync_full_playlist_v3';
 
-export function sendYouTubeIframeCommand(command: string, args: any[] = []) {
-  try {
-    const iframe = document.getElementById('lovesync_yt_stream') as HTMLIFrameElement | null;
-    if (iframe && iframe.contentWindow) {
-      const msgObj = {
-        event: 'command',
-        func: command,
-        args: args,
-      };
-      iframe.contentWindow.postMessage(JSON.stringify(msgObj), '*');
-      iframe.contentWindow.postMessage(msgObj, '*');
+// Target element id that MusicPlayer.tsx always renders (hidden, off-screen) so the official
+// YouTube IFrame Player API has a stable place to mount its player into on first use.
+export const YT_PLAYER_TARGET_ID = 'lovesync_yt_player_target';
 
-      if (command === 'pauseVideo') {
-        iframe.contentWindow.postMessage('{"event":"command","func":"pauseVideo","args":[]}', '*');
-        iframe.contentWindow.postMessage('{"event":"command","func":"pauseVideo","args":""}', '*');
-      } else if (command === 'playVideo') {
-        iframe.contentWindow.postMessage('{"event":"command","func":"playVideo","args":[]}', '*');
-        iframe.contentWindow.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
-      }
-    }
-  } catch (e) {
-    console.warn('YouTube postMessage error:', e);
+const YT_API_SCRIPT_ID = 'lovesync-youtube-iframe-api';
+
+// Loads the official YouTube IFrame Player API script exactly once and resolves with the global
+// `YT` namespace once it's ready. A bare `<iframe src=".../embed/...?enablejsapi=1">` driven by
+// hand-rolled postMessage calls (the previous approach) never actually receives any events back
+// and often silently ignores commands too — the embedded player only talks JSON postMessage once
+// it's been initialized through this real API, which is also what makes onStateChange/onReady
+// reliable instead of guesswork.
+let ytApiPromise: Promise<any> | null = null;
+function loadYouTubeIframeApi(): Promise<any> {
+  if (typeof window === 'undefined') return Promise.resolve(null);
+  if ((window as any).YT && (window as any).YT.Player) {
+    return Promise.resolve((window as any).YT);
   }
+  if (ytApiPromise) return ytApiPromise;
+
+  ytApiPromise = new Promise((resolve) => {
+    const prevCallback = (window as any).onYouTubeIframeAPIReady;
+    (window as any).onYouTubeIframeAPIReady = () => {
+      if (typeof prevCallback === 'function') prevCallback();
+      resolve((window as any).YT);
+    };
+    if (!document.getElementById(YT_API_SCRIPT_ID)) {
+      const tag = document.createElement('script');
+      tag.id = YT_API_SCRIPT_ID;
+      tag.src = 'https://www.youtube.com/iframe_api';
+      document.head.appendChild(tag);
+    }
+  });
+  return ytApiPromise;
 }
 
 export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -195,37 +184,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const currentTrack: MusicTrack | null = playlist[currentTrackIndex] || playlist[0] || null;
 
-  const hasSyncedProfileRef = useRef(false);
-  useEffect(() => {
-    if (myProfile && !hasSyncedProfileRef.current) {
-      if (myProfile.id && myProfile.authProvider !== 'guest') {
-        let shouldUpdate = false;
-        let newPlaylist = playlist;
-        
-        if (myProfile.musicPlaylist && Array.isArray(myProfile.musicPlaylist) && myProfile.musicPlaylist.length > 0) {
-          newPlaylist = myProfile.musicPlaylist;
-          shouldUpdate = true;
-        }
-        
-        if (shouldUpdate) {
-          setPlaylist(newPlaylist);
-          try {
-            localStorage.setItem(STORAGE_KEY_PLAYLIST, JSON.stringify(newPlaylist));
-          } catch {}
-        }
-
-        if (myProfile.musicCurrentTrackId) {
-          const idx = newPlaylist.findIndex((t: any) => t.id === myProfile.musicCurrentTrackId);
-          if (idx !== -1 && idx !== currentTrackIndex) {
-            setCurrentTrackIndex(idx);
-          }
-        }
-        
-        hasSyncedProfileRef.current = true;
-      }
-    }
-  }, [myProfile, playlist, currentTrackIndex]);
-
+  // Which song is playing is still worth remembering per-account (cheap, a single id string) —
+  // but the playlist itself has exactly one source of truth: the room's shared playlist below.
+  // An older version also mirrored the *entire* playlist array onto each profile, which meant
+  // every single Firestore write from either partner (not just music-related ones) kept
+  // re-embedding that whole array via broadcastRoomChanges — wasted bandwidth/quota, and a second
+  // copy of the data that could disagree with the room's actual shared list. Removed.
   useEffect(() => {
     if (updateMyProfile && currentTrack) {
       if (myProfile && myProfile.musicCurrentTrackId !== currentTrack.id) {
@@ -234,12 +198,11 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [currentTrack?.id, myProfile?.musicCurrentTrackId, updateMyProfile]);
 
+  // The couple's shared playlist lives in the room document (see coupleContext.roomPlaylist /
+  // updateRoomPlaylist) — adding or removing a track here updates it for both accounts.
   const persistPlaylist = (updatedPlaylist: MusicTrack[]) => {
     try {
       localStorage.setItem(STORAGE_KEY_PLAYLIST, JSON.stringify(updatedPlaylist));
-      if (updateMyProfile) {
-        updateMyProfile({ musicPlaylist: updatedPlaylist });
-      }
       if (coupleContext?.updateRoomPlaylist) {
         coupleContext.updateRoomPlaylist(updatedPlaylist);
       }
@@ -273,6 +236,21 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     nextTrackRef.current = nextTrack;
   }, [nextTrack]);
+
+  // Mirrors of state that the one-time YT.Player event callbacks below need to read without
+  // going stale (those callbacks are registered once, when the player is created).
+  const volumeRef = useRef(volume);
+  const isMutedRef = useRef(isMuted);
+  const isLoopingRef = useRef(isLooping);
+  useEffect(() => { volumeRef.current = volume; }, [volume]);
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  useEffect(() => { isLoopingRef.current = isLooping; }, [isLooping]);
+
+  // Real YT.Player instance (created once) + whether it has fired onReady yet. Loading a video
+  // before the player is ready queues it here instead of silently dropping the request.
+  const ytPlayerRef = useRef<any>(null);
+  const ytReadyRef = useRef(false);
+  const pendingYtActionRef = useRef<{ videoId: string; autoplay: boolean } | null>(null);
 
   useEffect(() => {
     const audio = new Audio();
@@ -328,52 +306,88 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, []);
 
-  // Listen for YouTube iframe playback state events to keep isPlaying 100% in sync
+  // Create the real YouTube IFrame Player once, targeting the hidden container MusicPlayer.tsx
+  // always renders. A raw `<iframe enablejsapi=1>` driven by hand-written postMessage calls (the
+  // previous approach) never actually receives events back and often ignores commands too — only
+  // a player created through this real API reliably answers play/pause/seek and reports state.
   useEffect(() => {
-    const handleWindowMessage = (event: MessageEvent) => {
+    let cancelled = false;
+    loadYouTubeIframeApi().then((YT) => {
+      if (cancelled || !YT || ytPlayerRef.current) return;
+      const target = document.getElementById(YT_PLAYER_TARGET_ID);
+      if (!target) return;
       try {
-        let payload = event.data;
-        if (typeof payload === 'string') {
-          try {
-            payload = JSON.parse(payload);
-          } catch {}
-        }
-        if (payload && typeof payload === 'object') {
-          // YT Player State: 1 = PLAYING, 2 = PAUSED, 0 = ENDED, 3 = BUFFERING
-          if (payload.event === 'onStateChange' || payload.info !== undefined) {
-            const pState = typeof payload.info === 'number' ? payload.info : payload.info?.playerState;
-            if (pState === 1 || pState === 3) {
-              setIsPlaying(true);
-            } else if (pState === 2) {
-              setIsPlaying(false);
-            } else if (pState === 0) {
-              setIsPlaying(false);
-              nextTrack();
-            }
-          } else if (payload.event === 'infoDelivery' && payload.info) {
-            if (payload.info.playerState === 1 || payload.info.playerState === 3) {
-              setIsPlaying(true);
-            } else if (payload.info.playerState === 2) {
-              setIsPlaying(false);
-            }
-            if (typeof payload.info.currentTime === 'number') {
-              setProgress(payload.info.currentTime);
-            }
-            if (typeof payload.info.duration === 'number' && payload.info.duration > 0) {
-              setDuration(payload.info.duration);
-            }
-          }
-        }
-      } catch (e) {
-        // Ignore parsing errors
+        ytPlayerRef.current = new YT.Player(YT_PLAYER_TARGET_ID, {
+          height: '1',
+          width: '1',
+          playerVars: { autoplay: 0, controls: 0, disablekb: 1, playsinline: 1, rel: 0 },
+          events: {
+            onReady: () => {
+              ytReadyRef.current = true;
+              try {
+                const p = ytPlayerRef.current;
+                p.setVolume(Math.round((isMutedRef.current ? 0 : volumeRef.current) * 100));
+                if (isMutedRef.current) p.mute();
+              } catch {}
+              const pending = pendingYtActionRef.current;
+              if (pending) {
+                pendingYtActionRef.current = null;
+                try {
+                  if (pending.autoplay) ytPlayerRef.current.loadVideoById(pending.videoId);
+                  else ytPlayerRef.current.cueVideoById(pending.videoId);
+                } catch {}
+              }
+            },
+            onStateChange: (e: any) => {
+              const state = e?.data;
+              if (state === 1 || state === 3) {
+                setIsPlaying(true);
+              } else if (state === 2) {
+                setIsPlaying(false);
+              } else if (state === 0) {
+                if (isLoopingRef.current) {
+                  try {
+                    ytPlayerRef.current.seekTo(0, true);
+                    ytPlayerRef.current.playVideo();
+                  } catch {}
+                } else {
+                  setIsPlaying(false);
+                  nextTrackRef.current();
+                }
+              }
+            },
+            onError: () => {
+              // Video removed/private/region-blocked — skip forward instead of stalling silently.
+              nextTrackRef.current();
+            },
+          },
+        });
+      } catch (err) {
+        console.warn('YouTube player init error:', err);
       }
-    };
-
-    window.addEventListener('message', handleWindowMessage);
+    });
     return () => {
-      window.removeEventListener('message', handleWindowMessage);
+      cancelled = true;
     };
-  }, [nextTrack]);
+  }, []);
+
+  // Poll playback position for the current YouTube track — the IFrame API doesn't push time
+  // updates on its own the way the native <audio> element's `timeupdate` event does.
+  useEffect(() => {
+    const isYouTube = currentTrack?.source === 'youtube' || !!currentTrack?.youtubeId;
+    if (!isYouTube || !isPlaying) return;
+    const interval = setInterval(() => {
+      const p = ytPlayerRef.current;
+      if (!p || typeof p.getCurrentTime !== 'function') return;
+      try {
+        const cur = p.getCurrentTime();
+        const dur = p.getDuration();
+        if (typeof cur === 'number' && !isNaN(cur)) setProgress(cur);
+        if (typeof dur === 'number' && dur > 0) setDuration(dur);
+      } catch {}
+    }, 500);
+    return () => clearInterval(interval);
+  }, [currentTrack?.id, isPlaying]);
 
   useEffect(() => {
     if (!currentTrack) return;
@@ -383,17 +397,32 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const isYouTube = currentTrack.source === 'youtube' || !!currentTrack.youtubeId;
 
-    if (isYouTube) {
+    if (isYouTube && currentTrack.youtubeId) {
       if (audioRef.current) {
         audioRef.current.pause();
       }
-      if (isNewTrack && isPlaying) {
-        setTimeout(() => {
-          sendYouTubeIframeCommand('playVideo');
-          sendYouTubeIframeCommand('setVolume', [isMuted ? 0 : Math.round(volume * 100)]);
-        }, 300);
+      if (isNewTrack) {
+        setProgress(0);
+        setDuration(0);
+        if (ytReadyRef.current && ytPlayerRef.current) {
+          try {
+            if (isPlaying) ytPlayerRef.current.loadVideoById(currentTrack.youtubeId);
+            else ytPlayerRef.current.cueVideoById(currentTrack.youtubeId);
+          } catch {}
+        } else {
+          pendingYtActionRef.current = { videoId: currentTrack.youtubeId, autoplay: isPlaying };
+        }
+      } else if (isPlaying && ytReadyRef.current) {
+        try {
+          ytPlayerRef.current.playVideo();
+        } catch {}
       }
     } else {
+      if (ytReadyRef.current && ytPlayerRef.current) {
+        try {
+          ytPlayerRef.current.pauseVideo();
+        } catch {}
+      }
       if (audioRef.current && currentTrack.url) {
         if (isNewTrack) {
           audioRef.current.src = currentTrack.url;
@@ -418,11 +447,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (audioRef.current) {
       audioRef.current.volume = effectiveVolume;
     }
-    sendYouTubeIframeCommand('setVolume', [Math.round(effectiveVolume * 100)]);
-    if (isMuted) {
-      sendYouTubeIframeCommand('mute');
-    } else {
-      sendYouTubeIframeCommand('unMute');
+    if (ytReadyRef.current && ytPlayerRef.current) {
+      try {
+        ytPlayerRef.current.setVolume(Math.round(effectiveVolume * 100));
+        if (isMuted) ytPlayerRef.current.mute();
+        else ytPlayerRef.current.unMute();
+      } catch {}
     }
   }, [volume, isMuted]);
 
@@ -445,12 +475,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
         audioRef.current.volume = isMuted ? 0 : volume;
         audioRef.current.play().catch(() => {});
-      } else if (isYouTube) {
-        setTimeout(() => {
-          sendYouTubeIframeCommand('playVideo');
-          sendYouTubeIframeCommand('setVolume', [isMuted ? 0 : Math.round(volume * 100)]);
-        }, 200);
       }
+      // YouTube playback is handled by the currentTrack-changed effect above — it knows whether
+      // the player is ready yet (queuing the load otherwise) so there's no risk of a race here.
     }
   };
 
@@ -470,8 +497,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         audios.forEach((a) => a.pause());
       } catch {}
 
-      if (isYouTube) {
-        sendYouTubeIframeCommand('pauseVideo');
+      if (isYouTube && ytReadyRef.current && ytPlayerRef.current) {
+        try {
+          ytPlayerRef.current.pauseVideo();
+        } catch {}
       }
     } else {
       setIsPlaying(true);
@@ -481,8 +510,13 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           console.warn('Audio resume error:', err);
         });
       } else if (isYouTube) {
-        sendYouTubeIframeCommand('playVideo');
-        sendYouTubeIframeCommand('setVolume', [isMuted ? 0 : Math.round(volume * 100)]);
+        if (ytReadyRef.current && ytPlayerRef.current) {
+          try {
+            ytPlayerRef.current.playVideo();
+          } catch {}
+        } else if (currentTrack.youtubeId) {
+          pendingYtActionRef.current = { videoId: currentTrack.youtubeId, autoplay: true };
+        }
       }
     }
   };
@@ -499,9 +533,11 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!isYouTube && audioRef.current) {
       audioRef.current.currentTime = seconds;
       setProgress(seconds);
-    } else if (isYouTube) {
-      sendYouTubeIframeCommand('seekTo', [seconds, true]);
-      setProgress(seconds);
+    } else if (isYouTube && ytReadyRef.current && ytPlayerRef.current) {
+      try {
+        ytPlayerRef.current.seekTo(seconds, true);
+        setProgress(seconds);
+      } catch {}
     }
   };
 
@@ -514,7 +550,11 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (audioRef.current) {
       audioRef.current.volume = clamped;
     }
-    sendYouTubeIframeCommand('setVolume', [Math.round(clamped * 100)]);
+    if (ytReadyRef.current && ytPlayerRef.current) {
+      try {
+        ytPlayerRef.current.setVolume(Math.round(clamped * 100));
+      } catch {}
+    }
   };
 
   const toggleMute = () => {
@@ -524,7 +564,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (audioRef.current) {
         audioRef.current.volume = nextVal ? 0 : volume;
       }
-      sendYouTubeIframeCommand(nextVal ? 'mute' : 'unMute');
+      if (ytReadyRef.current && ytPlayerRef.current) {
+        try {
+          if (nextVal) ytPlayerRef.current.mute();
+          else ytPlayerRef.current.unMute();
+        } catch {}
+      }
       return nextVal;
     });
   };

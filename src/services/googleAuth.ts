@@ -52,6 +52,38 @@ export function setCustomOAuthClientId(clientId: string): void {
   }
 }
 
+const YOUTUBE_API_KEY_STORAGE_KEY = 'lovesync_youtube_api_key';
+
+/**
+ * Get the YouTube Data API v3 key used to search for songs. There's no hardcoded default (unlike
+ * the OAuth Client ID) — a browser-usable YouTube API key is tied to whoever's Google Cloud
+ * project/billing it belongs to, so it can't be shipped as a shared fallback the way the OAuth
+ * client can. Falls back to a build-time VITE_YOUTUBE_API_KEY if one was configured.
+ */
+export function getYouTubeApiKey(): string {
+  if (typeof window !== 'undefined') {
+    const custom = localStorage.getItem(YOUTUBE_API_KEY_STORAGE_KEY)?.trim();
+    if (custom) return custom;
+  }
+  const envKey = typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_YOUTUBE_API_KEY : '';
+  return envKey || '';
+}
+
+/**
+ * Save a custom YouTube Data API v3 key (from Google Cloud Console → APIs & Services →
+ * Credentials, with "YouTube Data API v3" enabled on that project).
+ */
+export function setCustomYouTubeApiKey(apiKey: string): void {
+  if (typeof window !== 'undefined') {
+    const trimmed = apiKey.trim();
+    if (trimmed) {
+      localStorage.setItem(YOUTUBE_API_KEY_STORAGE_KEY, trimmed);
+    } else {
+      localStorage.removeItem(YOUTUBE_API_KEY_STORAGE_KEY);
+    }
+  }
+}
+
 // In-memory token cache (restored from localStorage if available)
 let cachedAccessToken: string | null = null;
 let isSigningIn = false;
