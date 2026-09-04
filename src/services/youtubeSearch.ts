@@ -56,7 +56,26 @@ export async function searchYouTubeVideos(query: string): Promise<YouTubeSearchR
     if (!res.ok) {
       const reason = data?.error?.errors?.[0]?.reason;
       if (reason === 'keyInvalid' || res.status === 400) {
-        return { results: [], needsApiKey: true, error: 'YouTube API Key không hợp lệ.' };
+        return { results: [], needsApiKey: true, error: 'YouTube API Key không hợp lệ — kiểm tra lại đã dán đúng chưa.' };
+      }
+      if (reason === 'accessNotConfigured') {
+        return {
+          results: [],
+          error: 'Chưa bật "YouTube Data API v3" cho project này. Vào Google Cloud Console → APIs & Services → Library → tìm "YouTube Data API v3" → bấm Enable, rồi thử lại.',
+        };
+      }
+      if (reason === 'quotaExceeded' || reason === 'dailyLimitExceeded' || reason === 'rateLimitExceeded') {
+        return {
+          results: [],
+          error: 'Đã dùng hết hạn ngạch tìm kiếm miễn phí hôm nay (khoảng 100 lượt/ngày). Thử lại vào ngày mai nhé.',
+        };
+      }
+      if (reason === 'ipRefererBlocked' || reason === 'forbidden') {
+        return {
+          results: [],
+          error:
+            'Key bị chặn theo tên miền — kiểm tra lại mục "Website restrictions" trong Google Cloud Console đã có đúng tên miền web hiện tại của bạn chưa (bấm F12 → Console để xem tên miền chính xác nếu cần).',
+        };
       }
       if (res.status === 403) {
         return {
