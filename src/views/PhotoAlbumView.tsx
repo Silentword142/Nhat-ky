@@ -1301,7 +1301,13 @@ export const PhotoAlbumView: React.FC = () => {
               const totalCount = album.isStreamAlbum
                 ? album.approxPhotoCount || 0
                 : Math.max(albumPhotos.length, (album as any).photoCount || 0);
+              // A real cover (set manually via "Sửa Tệp", or auto-pinned after the album's first
+              // upload — see handleSubmitBatchUpload) must stick: it should never be silently
+              // swapped out just because a newer photo got uploaded later. Only fall through to
+              // "whatever photo is first" while the album still has its default/placeholder cover.
+              const hasRealCover = album.coverImage && !album.coverImage.includes('unsplash');
               const coverImg =
+                (hasRealCover ? album.coverImage : null) ||
                 albumPhotos[0]?.thumbnailUrl ||
                 albumPhotos[0]?.imageUrl ||
                 album.coverImage ||
