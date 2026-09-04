@@ -120,13 +120,20 @@ export const CoupleContext = createContext<CoupleContextType | undefined>(undefi
 
 const STORAGE_KEY_PREFIX = 'lovesync_cloud_v2_';
 
-// Firestore documents are capped at 1MiB. Inline base64 image/canvas data (data: URLs) from
-// unsynced local photos or handwritten cards can blow past that instantly and silently break
-// realtime sync for the *entire* room (Firestore rejects the whole write). This strips any long
-// inline data: URL out of the payload right before it is sent to Firestore — the full-quality
-// version keeps living in localStorage on this device and, once uploaded to Google Drive, the
-// lightweight Drive URL takes its place and syncs normally.
-const MAX_INLINE_DATA_URL_LENGTH = 2000;
+// Firestore documents are capped at 1MiB. Inline base64 image data (data: URLs) from an
+// unsynced ORIGINAL-quality photo (photos are meant to go to Google Drive instead — see
+// PhotoAlbumView) can blow past that instantly and silently break realtime sync for the
+// *entire* room (Firestore rejects the whole write). This strips any long inline data: URL out
+// of the payload right before it is sent to Firestore — the full-quality version keeps living
+// in localStorage on this device.
+//
+// Avatars and handwritten-card drawings are NOT routed through Drive (by design — only Photo
+// Album uploads are) and are expected to sync through Firestore directly as base64, so the
+// threshold has to comfortably fit those: compressImageFile() (used for avatars) caps images at
+// 320x320 JPEG @ 85%, which lands well under 200KB as a data: URL. 250,000 chars (~180KB raw)
+// passes any normal compressed avatar/card through untouched while still catching an
+// accidentally-huge or uncompressed image blob before it can break the room's sync.
+const MAX_INLINE_DATA_URL_LENGTH = 250_000;
 function stripHeavyInlineDataForCloudSync<T>(value: T): T {
   if (typeof value === 'string') {
     if (value.startsWith('data:') && value.length > MAX_INLINE_DATA_URL_LENGTH) {
