@@ -42,6 +42,8 @@ import {
   uploadDataUrlImageToDrive,
   scanGoogleDriveFoldersAndPhotos,
   loadDriveFolderPage,
+  scanDriveFolderStructure,
+  DriveFolderNode,
   getCustomPhotosFolder,
   setCustomPhotosFolder,
   clearCustomPhotosFolder,
@@ -141,16 +143,21 @@ export const PhotoAlbumView: React.FC = () => {
   const [driveScanFeedback, setDriveScanFeedback] = useState<string | null>(null);
   const [activeSubfolder, setActiveSubfolder] = useState<string | null>(null);
 
-  // Paginated loading for a custom (usually large/personal) Drive folder — loads a fixed 100
-  // photos per click instead of scanning the whole folder, so a huge personal folder never
-  // triggers one giant scan; the user controls exactly how much gets pulled in, one page at a
-  // time, up to the same safety cap the deep scan uses.
-  const CUSTOM_FOLDER_PAGE_SIZE = 100;
-  const CUSTOM_FOLDER_IMPORT_CAP = 500;
-  const [customFolderNextPageToken, setCustomFolderNextPageToken] = useState<string | undefined>(undefined);
-  const [isLoadingCustomFolderPage, setIsLoadingCustomFolderPage] = useState(false);
-  const [customFolderImportedCount, setCustomFolderImportedCount] = useState(0);
-  const [customFolderHasStartedLoading, setCustomFolderHasStartedLoading] = useState(false);
+  // A custom photos folder (often a large personal Drive folder) is browsed LIVE, never synced:
+  // the folder *structure* (names/subfolders) is scanned once — cheap, no photos fetched — and
+  // opening a specific folder streams its photos straight from Drive, 100 at a time, kept only
+  // in this component's own state. None of it ever touches addPhotosBatch/Firestore, so it costs
+  // nothing against the Firebase free tier no matter how large the personal folder is.
+  const DRIVE_VIEW_PAGE_SIZE = 100;
+  const [driveOnlyFolders, setDriveOnlyFolders] = useState<DriveFolderNode[]>([]);
+  const [isScanningDriveStructure, setIsScanningDriveStructure] = useState(false);
+  const [driveStructureTruncated, setDriveStructureTruncated] = useState(false);
+  const [viewingDriveFolder, setViewingDriveFolder] = useState<{ id: string; name: string } | null>(null);
+  const [liveDrivePhotos, setLiveDrivePhotos] = useState<PhotoMemory[]>([]);
+  const [liveDriveNextPageToken, setLiveDriveNextPageToken] = useState<string | undefined>(undefined);
+  const [isLoadingLiveDrivePhotos, setIsLoadingLiveDrivePhotos] = useState(false);
+  const [liveDriveLightboxOpen, setLiveDriveLightboxOpen] = useState(false);
+  const [liveDriveLightboxIndex, setLiveDriveLightboxIndex] = useState(0);
 
   // Selected Album: null = Folder Overview list, 'all' = All photos, or album ID/name
   const [activeAlbumId, setActiveAlbumId] = useState<string | null>(null);
@@ -232,9 +239,11 @@ export const PhotoAlbumView: React.FC = () => {
       setActiveCustomFolder(null);
       setCustomFolderVerifyResult(null);
       setCustomFolderVerifyError(null);
-      setCustomFolderNextPageToken(undefined);
-      setCustomFolderImportedCount(0);
-      setCustomFolderHasStartedLoading(false);
+      setDriveOnlyFolders([]);
+      setDriveStructureTruncated(false);
+      setViewingDriveFolder(null);
+      setLiveDrivePhotos([]);
+      setLiveDriveNextPageToken(undefined);
       soundService.playSparkle();
       setDriveScanFeedback('✓ Đã khôi phục về thư mục ảnh mặc định của LoveSync!');
       setIsDriveFolderModalOpen(false);
@@ -273,18 +282,22 @@ export const PhotoAlbumView: React.FC = () => {
       const saved = setCustomPhotosFolder(details.id, finalName);
       setActiveCustomFolder(saved);
       setCustomFolderVerifyResult(saved ? { id: saved.id, name: finalName, url: saved.url } : null);
-      // Reset pagination — a page token from whichever folder was active before is meaningless here
-      setCustomFolderNextPageToken(undefined);
-      setCustomFolderImportedCount(0);
-      setCustomFolderHasStartedLoading(false);
+      // Reset structure/live-view state — anything from whichever folder was active before is
+      // meaningless here
+      setDriveOnlyFolders([]);
+      setDriveStructureTruncated(false);
+      setViewingDriveFolder(null);
+      setLiveDrivePhotos([]);
+      setLiveDriveNextPageToken(undefined);
       soundService.playSparkle();
       // Deliberately NOT auto-loading here. A custom folder is very often a general personal
       // Drive folder (camera roll backups etc.), not a small folder made just for this app — an
       // automatic full scan right after linking it is exactly what silently hung/broke sync the
       // last time. Saving the link is enough on its own (new uploads go there, "Mở Google Drive"
-      // points there); pulling in existing photos is now a separate, explicit action — the user
-      // clicks "Tải 100 Ảnh Tiếp Theo" as many times as they want, 100 photos at a time.
-      setDriveScanFeedback(`✓ Đã lưu đường dẫn thư mục "${finalName}"! Ảnh mới tải lên sẽ vào đây. Bấm "Tải 100 Ảnh Tiếp Theo" nếu muốn xem ảnh có sẵn trong thư mục này.`);
+      // points there); browsing existing photos is a separate, explicit, view-only action — the
+      // user scans the folder structure, then opens a sub-album to view 100 photos at a time.
+      // Nothing seen this way is ever imported into the app or written to Firestore.
+      setDriveScanFeedback(`✓ Đã lưu đường dẫn thư mục "${finalName}"! Ảnh mới tải lên sẽ vào đây. Bấm "Quét Thư Mục Cá Nhân" nếu muốn xem ảnh có sẵn trong thư mục này.`);
       setTimeout(() => {
         setIsDriveFolderModalOpen(false);
         setDriveScanFeedback(null);
@@ -304,9 +317,11 @@ export const PhotoAlbumView: React.FC = () => {
     setCustomFolderNameInput('');
     setCustomFolderVerifyResult(null);
     setCustomFolderVerifyError(null);
-    setCustomFolderNextPageToken(undefined);
-    setCustomFolderImportedCount(0);
-    setCustomFolderHasStartedLoading(false);
+    setDriveOnlyFolders([]);
+    setDriveStructureTruncated(false);
+    setViewingDriveFolder(null);
+    setLiveDrivePhotos([]);
+    setLiveDriveNextPageToken(undefined);
     soundService.playSparkle();
     setDriveScanFeedback('✓ Đã khôi phục về thư mục ảnh mặc định của LoveSync!');
     setIsDriveFolderModalOpen(false);
@@ -481,71 +496,116 @@ export const PhotoAlbumView: React.FC = () => {
     }
   }, [myProfile.id, myProfile.name, photos, addPhotosBatch]);
 
-  // Load exactly one page (100 photos) from the active custom Drive folder. Call again with the
-  // token this returns to keep going — the user decides how many pages to pull in, rather than
-  // the app scanning the whole (possibly huge) folder in one shot.
-  const handleLoadNextCustomFolderPage = useCallback(async () => {
+  // Scan only the FOLDER STRUCTURE (names/subfolders) of the active custom Drive folder — no
+  // photos are fetched or stored anywhere here, so this is safe and cheap to run against even a
+  // huge personal folder.
+  const handleScanCustomFolderStructure = useCallback(async () => {
     if (!activeCustomFolder) return;
-    if (customFolderImportedCount >= CUSTOM_FOLDER_IMPORT_CAP) return;
-
     try {
-      setIsLoadingCustomFolderPage(true);
+      setIsScanningDriveStructure(true);
       let token = await getAccessToken();
       if (!token) {
         const res = await googleSignIn();
         token = res?.accessToken || null;
       }
       if (!token) {
-        alert('Vui lòng kết nối Google Drive để tải ảnh từ thư mục.');
+        alert('Vui lòng kết nối Google Drive để duyệt thư mục.');
         return;
       }
 
-      const pageResult = await loadDriveFolderPage(
-        token,
-        activeCustomFolder.id,
-        customFolderNextPageToken,
-        CUSTOM_FOLDER_PAGE_SIZE,
-        myProfile.id,
-        myProfile.name
-      );
-
-      if (!pageResult.success) {
-        setDriveScanFeedback(pageResult.error || 'Không thể tải ảnh từ thư mục này.');
+      const result = await scanDriveFolderStructure(token, activeCustomFolder.id);
+      if (!result.success) {
+        setDriveScanFeedback(result.error || 'Không thể quét cấu trúc thư mục này.');
         setTimeout(() => setDriveScanFeedback(null), 5000);
         return;
       }
 
-      const existingIds = new Set(photos.map((p) => p.originalFileId || p.id));
-      const newPhotos = pageResult.photos.filter(
-        (p) => !existingIds.has(p.originalFileId) && !existingIds.has(p.id)
+      setDriveOnlyFolders(result.folders);
+      setDriveStructureTruncated(!!result.truncated);
+      soundService.playSparkle();
+      setDriveScanFeedback(
+        result.truncated
+          ? `✓ Đã tìm thấy ${result.folders.length} thư mục (thư mục có rất nhiều thư mục con, chỉ hiện một phần).`
+          : `✓ Đã tìm thấy ${result.folders.length} thư mục con. Bấm vào một thư mục để xem ảnh (chỉ xem, không lưu vào Firebase).`
       );
-      if (newPhotos.length > 0) {
-        addPhotosBatch(newPhotos);
-      }
-
-      setCustomFolderNextPageToken(pageResult.nextPageToken);
-      setCustomFolderHasStartedLoading(true);
-      setCustomFolderImportedCount((prev) => {
-        const next = prev + newPhotos.length;
-        soundService.playSparkle();
-        if (next >= CUSTOM_FOLDER_IMPORT_CAP) {
-          setDriveScanFeedback(`✓ Đã tải ${next} ảnh — đạt giới hạn an toàn ${CUSTOM_FOLDER_IMPORT_CAP} ảnh cho một thư mục.`);
-        } else if (!pageResult.nextPageToken) {
-          setDriveScanFeedback(`✓ Đã tải hết ${next} ảnh trong thư mục "${pageResult.folderName || activeCustomFolder.name}".`);
-        } else {
-          setDriveScanFeedback(`✓ Đã tải thêm ${newPhotos.length} ảnh (tổng ${next}). Bấm "Tải Thêm 100 Ảnh" để tiếp tục.`);
-        }
-        setTimeout(() => setDriveScanFeedback(null), 6000);
-        return next;
-      });
+      setTimeout(() => setDriveScanFeedback(null), 7000);
     } catch (err: any) {
-      console.warn('Load Drive folder page error:', err);
-      setDriveScanFeedback('Không thể tải ảnh từ thư mục Google Drive lúc này.');
+      console.warn('Scan Drive folder structure error:', err);
+      setDriveScanFeedback('Không thể quét cấu trúc thư mục Google Drive lúc này.');
       setTimeout(() => setDriveScanFeedback(null), 4000);
     } finally {
-      setIsLoadingCustomFolderPage(false);
+      setIsScanningDriveStructure(false);
     }
-  }, [activeCustomFolder, customFolderNextPageToken, customFolderImportedCount, myProfile.id, myProfile.name, photos, addPhotosBatch]);
+  }, [activeCustomFolder]);
+
+  // Open a specific Drive folder for LIVE viewing (first page of photos). Nothing here is ever
+  // written to addPhotosBatch/Firestore — it's held only in this component's own state, gone the
+  // moment the user navigates away.
+  const handleOpenDriveFolderForViewing = useCallback(
+    async (folder: { id: string; name: string }) => {
+      soundService.playPop();
+      setViewingDriveFolder(folder);
+      setLiveDrivePhotos([]);
+      setLiveDriveNextPageToken(undefined);
+
+      try {
+        setIsLoadingLiveDrivePhotos(true);
+        const token = await getAccessToken();
+        if (!token) {
+          setDriveScanFeedback('Chưa kết nối Google Drive.');
+          setTimeout(() => setDriveScanFeedback(null), 4000);
+          return;
+        }
+        const pageResult = await loadDriveFolderPage(token, folder.id, undefined, DRIVE_VIEW_PAGE_SIZE, myProfile.id, myProfile.name);
+        if (pageResult.success) {
+          setLiveDrivePhotos(pageResult.photos);
+          setLiveDriveNextPageToken(pageResult.nextPageToken);
+        } else {
+          setDriveScanFeedback(pageResult.error || 'Không thể tải ảnh từ thư mục này.');
+          setTimeout(() => setDriveScanFeedback(null), 5000);
+        }
+      } catch (err) {
+        console.warn('Open Drive folder for viewing error:', err);
+      } finally {
+        setIsLoadingLiveDrivePhotos(false);
+      }
+    },
+    [myProfile.id, myProfile.name]
+  );
+
+  // Load the next page (100 more) of the currently-open live Drive folder — appended to what's
+  // already showing, still purely local/in-memory.
+  const handleLoadMoreLiveDrivePhotos = useCallback(async () => {
+    if (!viewingDriveFolder || !liveDriveNextPageToken) return;
+    try {
+      setIsLoadingLiveDrivePhotos(true);
+      const token = await getAccessToken();
+      if (!token) return;
+      const pageResult = await loadDriveFolderPage(
+        token,
+        viewingDriveFolder.id,
+        liveDriveNextPageToken,
+        DRIVE_VIEW_PAGE_SIZE,
+        myProfile.id,
+        myProfile.name
+      );
+      if (pageResult.success) {
+        setLiveDrivePhotos((prev) => [...prev, ...pageResult.photos]);
+        setLiveDriveNextPageToken(pageResult.nextPageToken);
+      }
+    } catch (err) {
+      console.warn('Load more live Drive photos error:', err);
+    } finally {
+      setIsLoadingLiveDrivePhotos(false);
+    }
+  }, [viewingDriveFolder, liveDriveNextPageToken, myProfile.id, myProfile.name]);
+
+  const handleCloseDriveFolderViewer = () => {
+    soundService.playPop();
+    setViewingDriveFolder(null);
+    setLiveDrivePhotos([]);
+    setLiveDriveNextPageToken(undefined);
+  };
 
   // Auto scan once on mount if Drive is connected — but only when using the app's own default
   // folder. A custom folder (set via "Đổi Link Thư Mục Drive") is very often a general personal
@@ -580,6 +640,31 @@ export const PhotoAlbumView: React.FC = () => {
     const idx = currentViewPhotos.findIndex((p) => p.id === photo.id);
     setLightboxIndex(idx >= 0 ? idx : 0);
     setLightboxOpen(true);
+  };
+
+  // Lightbox items for the live (view-only) Drive folder browser — same shape as the main
+  // lightbox, built from whatever page of liveDrivePhotos is currently loaded in memory.
+  const liveDriveLightboxItems: LightboxImageItem[] = useMemo(() => {
+    return liveDrivePhotos.map((p) => ({
+      url: p.imageUrl,
+      title: p.title,
+      caption: p.caption,
+      date: formatDateVN(p.date),
+      location: p.location,
+      authorName: p.authorName,
+      originalQuality: true,
+      originalFileId: p.originalFileId,
+      driveViewUrl: p.driveViewUrl,
+      driveDownloadUrl: p.driveDownloadUrl,
+      fileSize: p.fileSize,
+      fileName: p.fileName,
+    }));
+  }, [liveDrivePhotos]);
+
+  const openLiveDriveLightbox = (index: number) => {
+    soundService.playPop();
+    setLiveDriveLightboxIndex(index);
+    setLiveDriveLightboxOpen(true);
   };
 
   // Handle Multi-file upload for Batch with 100% Original Quality
@@ -988,24 +1073,23 @@ export const PhotoAlbumView: React.FC = () => {
           {isGoogleDriveConnected ? (
             <>
               {/* Scan & Open Drive Folders — deep multi-album scan for the app's own default
-                  folder, or a flat 100-at-a-time page loader for a custom (often personal/large)
-                  folder so it never tries to enumerate everything in one go. */}
+                  folder, or a structure-only scan (folder names + counts, zero photos fetched)
+                  for a custom (often personal/large) folder. Photos in a custom folder are only
+                  ever viewed live, 100 at a time, never imported/stored in the app. */}
               {activeCustomFolder ? (
                 <button
-                  onClick={handleLoadNextCustomFolderPage}
-                  disabled={isLoadingCustomFolderPage || customFolderImportedCount >= CUSTOM_FOLDER_IMPORT_CAP}
+                  onClick={handleScanCustomFolderStructure}
+                  disabled={isScanningDriveStructure}
                   className="px-3.5 py-2 rounded-2xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
-                  title={`Tải ${CUSTOM_FOLDER_PAGE_SIZE} ảnh tiếp theo trong thư mục "${activeCustomFolder.name || ''}"`}
+                  title={`Quét cấu trúc thư mục con trong "${activeCustomFolder.name || ''}" (chỉ xem, không lưu)`}
                 >
-                  <FolderTree className={`w-3.5 h-3.5 ${isLoadingCustomFolderPage ? 'animate-spin' : ''}`} />
+                  <FolderTree className={`w-3.5 h-3.5 ${isScanningDriveStructure ? 'animate-spin' : ''}`} />
                   <span>
-                    {isLoadingCustomFolderPage
-                      ? 'Đang tải...'
-                      : customFolderImportedCount >= CUSTOM_FOLDER_IMPORT_CAP
-                      ? `Đã đạt giới hạn ${CUSTOM_FOLDER_IMPORT_CAP} ảnh`
-                      : customFolderHasStartedLoading
-                      ? `Tải Thêm ${CUSTOM_FOLDER_PAGE_SIZE} Ảnh (${customFolderImportedCount} đã tải)`
-                      : `Tải ${CUSTOM_FOLDER_PAGE_SIZE} Ảnh Đầu Tiên`}
+                    {isScanningDriveStructure
+                      ? 'Đang quét thư mục...'
+                      : driveOnlyFolders.length > 0
+                      ? `Quét Lại (${driveOnlyFolders.length} thư mục)`
+                      : 'Quét Thư Mục Cá Nhân'}
                   </span>
                 </button>
               ) : (
@@ -1061,6 +1145,106 @@ export const PhotoAlbumView: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* 1B. PERSONAL DRIVE FOLDER — VIEW-ONLY BROWSER (zero Firestore storage)   */}
+      {/* ========================================================================= */}
+      {activeCustomFolder && driveOnlyFolders.length > 0 && !viewingDriveFolder && (
+        <div className="mb-6 p-4 sm:p-5 rounded-3xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border border-emerald-100 dark:border-zinc-800 shadow-sm">
+          <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+            <h3 className="text-sm font-bold text-zinc-800 dark:text-zinc-100 flex items-center gap-1.5">
+              <FolderTree className="w-4 h-4 text-emerald-500" />
+              Thư Mục Con Trong "{activeCustomFolder.name}"
+            </h3>
+            <span className="text-[11px] text-zinc-400 dark:text-zinc-500">
+              Chỉ xem — không lưu vào Firebase
+            </span>
+          </div>
+          {driveStructureTruncated && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 mb-3">
+              ⚠️ Thư mục có rất nhiều thư mục con, chỉ hiện một phần để tránh quá tải.
+            </p>
+          )}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            {driveOnlyFolders.map((folder) => (
+              <button
+                key={folder.id}
+                onClick={() => handleOpenDriveFolderForViewing({ id: folder.id, name: folder.name })}
+                className="flex flex-col items-start p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border border-zinc-200 dark:border-zinc-700 hover:border-emerald-300 dark:hover:border-emerald-800 transition text-left cursor-pointer"
+              >
+                <Folder className="w-5 h-5 text-emerald-500 mb-2" />
+                <span className="text-xs font-bold text-zinc-800 dark:text-zinc-100 line-clamp-2">
+                  {folder.name}
+                </span>
+                <span className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-1">
+                  {folder.approxPhotoCount}{folder.hasMorePhotosThanCounted ? '+' : ''} ảnh
+                  {folder.subfolders.length > 0 ? ` · ${folder.subfolders.length} thư mục con` : ''}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 1C. PERSONAL DRIVE FOLDER — LIVE PHOTO VIEWER (100 at a time, in-memory)  */}
+      {/* ========================================================================= */}
+      {viewingDriveFolder && (
+        <div className="mb-6 p-4 sm:p-5 rounded-3xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border border-emerald-100 dark:border-zinc-800 shadow-sm">
+          <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
+            <button
+              onClick={handleCloseDriveFolderViewer}
+              className="flex items-center gap-1.5 text-xs font-bold text-zinc-500 hover:text-rose-500 transition cursor-pointer"
+            >
+              ← Quay lại danh sách thư mục
+            </button>
+            <h3 className="text-sm font-bold text-zinc-800 dark:text-zinc-100">
+              {viewingDriveFolder.name} <span className="text-zinc-400 font-normal">({liveDrivePhotos.length} ảnh đã tải)</span>
+            </h3>
+          </div>
+
+          {liveDrivePhotos.length === 0 && isLoadingLiveDrivePhotos ? (
+            <div className="py-16 text-center text-zinc-400 text-sm">Đang tải ảnh...</div>
+          ) : liveDrivePhotos.length === 0 ? (
+            <div className="py-16 text-center text-zinc-400 text-sm">Thư mục này không có ảnh.</div>
+          ) : (
+            <>
+              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2 sm:gap-3">
+                {liveDrivePhotos.map((photo, idx) => (
+                  <div
+                    key={photo.id}
+                    onClick={() => openLiveDriveLightbox(idx)}
+                    className="relative aspect-square rounded-xl overflow-hidden cursor-pointer bg-zinc-100 dark:bg-zinc-800 group"
+                  >
+                    <SmartDriveImage
+                      src={photo.thumbnailUrl || photo.imageUrl}
+                      thumbnailSize={300}
+                      originalFileId={photo.originalFileId}
+                      driveViewUrl={photo.driveViewUrl}
+                      alt={photo.title}
+                      containerClassName="w-full h-full"
+                      className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              {liveDriveNextPageToken && (
+                <div className="flex justify-center mt-5">
+                  <button
+                    onClick={handleLoadMoreLiveDrivePhotos}
+                    disabled={isLoadingLiveDrivePhotos}
+                    className="px-5 py-2.5 rounded-2xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingLiveDrivePhotos ? 'animate-spin' : ''}`} />
+                    <span>{isLoadingLiveDrivePhotos ? 'Đang tải...' : `Xem Thêm ${DRIVE_VIEW_PAGE_SIZE} Ảnh`}</span>
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* 2. OVERVIEW MODE: ALBUM FOLDERS LIST (Giao diện từng tệp / Folder Cards) */}
@@ -2119,6 +2303,14 @@ export const PhotoAlbumView: React.FC = () => {
         initialIndex={lightboxIndex}
         isOpen={lightboxOpen}
         onClose={() => setLightboxOpen(false)}
+      />
+
+      {/* Lightbox for the live (view-only) personal Drive folder browser */}
+      <ImageLightbox
+        images={liveDriveLightboxItems}
+        initialIndex={liveDriveLightboxIndex}
+        isOpen={liveDriveLightboxOpen}
+        onClose={() => setLiveDriveLightboxOpen(false)}
       />
     </div>
   );

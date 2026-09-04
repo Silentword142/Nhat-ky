@@ -844,3 +844,135 @@ export async function loadDriveFolderPage(
   }
 }
 
+export interface DriveFolderNode {
+  id: string;
+  name: string;
+  driveFolderUrl: string;
+  approxPhotoCount: number;
+  hasMorePhotosThanCounted: boolean;
+  subfolders: DriveFolderNode[];
+}
+
+export interface DriveFolderStructureResult {
+  success: boolean;
+  rootName?: string;
+  folders: DriveFolderNode[];
+  truncated?: boolean;
+  error?: string;
+}
+
+/**
+ * Discover the folder *structure* (names + subfolder names, 2 levels deep) under a root Drive
+ * folder — deliberately WITHOUT ever fetching the photos inside. This is what makes it safe and
+ * cheap to run against a large personal folder: listing folder names is a handful of API calls
+ * regardless of how many images live inside them. Each folder's photo count is only an
+ * approximation (one page, up to 1000) so a huge folder doesn't turn counting into its own slow
+ * full scan — `hasMorePhotosThanCounted` tells the caller the real count is at least that high.
+ * Actually viewing a folder's photos is a separate step: loadDriveFolderPage(), called only once
+ * the user opens that specific folder, and never persisted anywhere.
+ */
+export async function scanDriveFolderStructure(
+  accessToken: string,
+  rootFolderId: string
+): Promise<DriveFolderStructureResult> {
+  try {
+    const rootDetails = await getFolderDetails(accessToken, rootFolderId);
+    if (!rootDetails) {
+      return { success: false, folders: [], error: 'Không tìm thấy thư mục hoặc chưa có quyền truy cập.' };
+    }
+
+    let foldersVisited = 0;
+    let truncated = false;
+
+    async function listSubfolders(parentId: string): Promise<Array<{ id: string; name: string; webViewLink?: string }>> {
+      if (foldersVisited >= MAX_SCAN_FOLDERS) {
+        truncated = true;
+        return [];
+      }
+      const q = `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+      const fields = 'files(id, name, webViewLink)';
+      const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&orderBy=name&pageSize=1000&spaces=drive`;
+      try {
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (!res.ok) return [];
+        const data = await res.json();
+        const files = Array.isArray(data.files) ? data.files : [];
+        foldersVisited += files.length;
+        if (foldersVisited >= MAX_SCAN_FOLDERS) truncated = true;
+        return files;
+      } catch (err) {
+        console.warn(`listSubfolders error for ${parentId}:`, err);
+        return [];
+      }
+    }
+
+    // One cheap page (up to 1000) to approximate how many photos are directly in a folder,
+    // without paginating through the whole thing.
+    async function countPhotosApprox(folderId: string): Promise<{ count: number; hasMore: boolean }> {
+      const q = `'${folderId}' in parents and mimeType contains 'image/' and trashed = false`;
+      const fields = 'nextPageToken, files(id)';
+      const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&pageSize=1000&spaces=drive`;
+      try {
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (!res.ok) return { count: 0, hasMore: false };
+        const data = await res.json();
+        const files = Array.isArray(data.files) ? data.files : [];
+        return { count: files.length, hasMore: !!data.nextPageToken };
+      } catch {
+        return { count: 0, hasMore: false };
+      }
+    }
+
+    async function buildNode(id: string, name: string, webViewLink: string | undefined, depth: number): Promise<DriveFolderNode> {
+      const [{ count, hasMore }, children] = await Promise.all([
+        countPhotosApprox(id),
+        depth > 0 ? listSubfolders(id) : Promise.resolve([]),
+      ]);
+
+      const subfolders: DriveFolderNode[] = [];
+      for (const child of children) {
+        if (foldersVisited >= MAX_SCAN_FOLDERS) {
+          truncated = true;
+          break;
+        }
+        subfolders.push(await buildNode(child.id, child.name, child.webViewLink, depth - 1));
+      }
+
+      return {
+        id,
+        name,
+        driveFolderUrl: webViewLink || `https://drive.google.com/drive/folders/${id}`,
+        approxPhotoCount: count,
+        hasMorePhotosThanCounted: hasMore,
+        subfolders,
+      };
+    }
+
+    const topLevel = await listSubfolders(rootFolderId);
+    const folders: DriveFolderNode[] = [];
+    for (const f of topLevel) {
+      if (foldersVisited >= MAX_SCAN_FOLDERS) {
+        truncated = true;
+        break;
+      }
+      // 1 extra level of subfolders under each top-level folder (matches the couple album's
+      // usual "Album -> Ngày 1 / Ngày 2" nesting pattern)
+      folders.push(await buildNode(f.id, f.name, f.webViewLink, 1));
+    }
+
+    return {
+      success: true,
+      rootName: rootDetails.name,
+      folders,
+      truncated,
+    };
+  } catch (err: any) {
+    console.error('scanDriveFolderStructure Error:', err);
+    return {
+      success: false,
+      folders: [],
+      error: err.message || 'Lỗi khi quét cấu trúc thư mục Google Drive.',
+    };
+  }
+}
+
