@@ -399,9 +399,11 @@ export async function loginWithGoogle(roomCode?: string): Promise<UserAccountDat
       ? roomCode.trim().toUpperCase() 
       : `ROOM-${user.uid.substring(0, 6).toUpperCase()}`;
 
+    const cleanUsername = (user.email ? user.email.split('@')[0] : user.uid).toLowerCase();
+
     let userData: UserAccountData = {
       id: user.uid,
-      username: user.email?.split('@')[0] || user.uid,
+      username: cleanUsername,
       displayName: user.displayName || 'Người dùng Google',
       photoURL: user.photoURL || '',
       avatar: user.photoURL || '',
@@ -410,7 +412,7 @@ export async function loginWithGoogle(roomCode?: string): Promise<UserAccountDat
       authProvider: 'google',
     };
 
-    // Register/sync Google account to server
+    // Register/sync Google account to server (fullstack deployments only — 404s on static hosting)
     try {
       const syncRes = await fetch('/api/auth/google-sync', {
         method: 'POST',
@@ -440,6 +442,54 @@ export async function loginWithGoogle(roomCode?: string): Promise<UserAccountDat
         }
       }
     } catch {}
+
+    // Fetch the previously saved cloud profile from Firestore (the actual source of truth on
+    // GitHub Pages / static hosting) — without this, a Google login NEVER looked up any custom
+    // avatar/bio/etc. the user had already saved, so it silently reverted to the raw Google
+    // profile photo on every single re-login.
+    try {
+      const userDocSnap = await withTimeout(getDoc(doc(db, 'users', cleanUsername)));
+      if (userDocSnap.exists()) {
+        const cloudUser = userDocSnap.data() as any;
+        userData = {
+          ...userData,
+          roomCode: cloudUser.roomCode || userData.roomCode,
+          partnerUsername: cloudUser.partnerUsername || userData.partnerUsername,
+          partnerDisplayName: cloudUser.partnerDisplayName || userData.partnerDisplayName,
+          birthday: cloudUser.birthday || userData.birthday,
+          gender: cloudUser.gender || userData.gender,
+          bio: cloudUser.bio || userData.bio,
+          loveQuote: cloudUser.loveQuote || userData.loveQuote,
+          profile: cloudUser.profile || userData.profile,
+          // A previously saved custom avatar wins over the raw Google photo; if none was ever
+          // saved, the Google photo (already in userData.avatar) is used as the starting avatar.
+          avatar: cloudUser.avatar || userData.avatar,
+        };
+      }
+    } catch (err) {
+      console.warn('[Auth] Could not fetch saved Google profile from Firestore:', err);
+    }
+
+    // Save/refresh this account's cloud record so future devices can find it too
+    try {
+      await withTimeout(
+        setDoc(
+          doc(db, 'users', cleanUsername),
+          {
+            id: user.uid,
+            username: cleanUsername,
+            displayName: userData.displayName,
+            avatar: userData.avatar,
+            email: user.email || '',
+            roomCode: userData.roomCode,
+            updatedAt: Date.now(),
+          },
+          { merge: true }
+        )
+      );
+    } catch (err) {
+      console.warn('[Auth] Could not save Google account to Firestore:', err);
+    }
 
     localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(userData));
     return userData;
