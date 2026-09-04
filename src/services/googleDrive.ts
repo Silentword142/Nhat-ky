@@ -495,8 +495,22 @@ export interface DriveScanResult {
   photosFolderUrl?: string;
   totalPhotosCount: number;
   totalFoldersCount: number;
+  truncated?: boolean;
   error?: string;
 }
+
+// Hard safety caps for scanning. This is meant for a couple's shared album folder (dozens to a
+// few thousand photos) — if it's accidentally pointed at something like a full personal camera-
+// roll backup (hundreds of thousands of files), scanning everything would take forever, risk
+// hitting Drive API rate limits, and — worse — trying to sync that many photo entries through
+// Firestore (a single ~1MiB document) would break sync for the entire room. Stop well short of
+// that and tell the caller it was truncated instead of silently hanging or failing.
+// Each synced photo entry carries several URLs/fields (~400-800 bytes as JSON), and the whole
+// photos array shares the same ~1MiB Firestore document as diaries/cards/anniversaries/profiles.
+// 2000 photos alone could already approach that limit; 500 keeps real headroom for everything
+// else while still comfortably covering a genuine couple's shared album.
+const MAX_SCAN_PHOTOS = 500;
+const MAX_SCAN_FOLDERS = 100;
 
 /**
  * Deeply scan Google Drive to discover all folders, nested subfolders, and photos uploaded directly or via app
@@ -514,7 +528,11 @@ export async function scanGoogleDriveFoldersAndPhotos(
     const authorId = currentUserId || 'user_drive';
     const authorName = currentUserName || 'Google Drive';
 
-    // Helper: Query subfolders of a given parent folder with full pagination
+    let photosCollected = 0;
+    let foldersVisited = 0;
+    let truncated = false;
+
+    // Helper: Query subfolders of a given parent folder with full pagination (capped)
     async function getSubfoldersOf(parentId: string): Promise<Array<{ id: string; name: string; webViewLink?: string; createdTime?: string; modifiedTime?: string }>> {
       const allFolders: Array<{ id: string; name: string; webViewLink?: string; createdTime?: string; modifiedTime?: string }> = [];
       let pageToken: string | undefined = undefined;
@@ -522,6 +540,10 @@ export async function scanGoogleDriveFoldersAndPhotos(
       const fields = 'nextPageToken, files(id, name, webViewLink, createdTime, modifiedTime)';
 
       do {
+        if (foldersVisited + allFolders.length >= MAX_SCAN_FOLDERS) {
+          truncated = true;
+          break;
+        }
         let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&orderBy=name&pageSize=1000&spaces=drive`;
         if (pageToken) {
           url += `&pageToken=${encodeURIComponent(pageToken)}`;
@@ -540,22 +562,32 @@ export async function scanGoogleDriveFoldersAndPhotos(
         }
       } while (pageToken);
 
+      foldersVisited += allFolders.length;
       return allFolders;
     }
 
-    // Helper: Query image files of a given parent folder with full pagination (handles 2000+ photos)
+    // Helper: Query image files of a given parent folder with full pagination, stopping once
+    // the global MAX_SCAN_PHOTOS budget is used up.
     async function getImagesOf(
       parentId: string,
       albumId: string,
       albumName: string,
       subfolderName?: string
     ): Promise<PhotoMemory[]> {
+      if (photosCollected >= MAX_SCAN_PHOTOS) {
+        truncated = true;
+        return [];
+      }
       const allFiles: any[] = [];
       let pageToken: string | undefined = undefined;
       const q = `'${parentId}' in parents and mimeType contains 'image/' and trashed = false`;
       const fields = 'nextPageToken, files(id, name, mimeType, size, webViewLink, webContentLink, thumbnailLink, createdTime, modifiedTime, imageMediaMetadata)';
 
       do {
+        if (photosCollected + allFiles.length >= MAX_SCAN_PHOTOS) {
+          truncated = true;
+          break;
+        }
         let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&orderBy=createdTime desc&pageSize=1000&spaces=drive`;
         if (pageToken) {
           url += `&pageToken=${encodeURIComponent(pageToken)}`;
@@ -576,6 +608,8 @@ export async function scanGoogleDriveFoldersAndPhotos(
           break;
         }
       } while (pageToken);
+
+      photosCollected += allFiles.length;
 
       return allFiles.map((file: any) => {
         const createdMs = file.createdTime ? new Date(file.createdTime).getTime() : Date.now();
@@ -626,8 +660,13 @@ export async function scanGoogleDriveFoldersAndPhotos(
     const scannedFolders: DriveScannedFolder[] = [];
     const allCollectedPhotos: PhotoMemory[] = [];
 
-    // Process each main folder
+    // Process each main folder (stop early once the safety budget is used up)
     for (const folder of allMainFolders) {
+      if (photosCollected >= MAX_SCAN_PHOTOS || foldersVisited >= MAX_SCAN_FOLDERS) {
+        truncated = true;
+        break;
+      }
+
       // Find sub-subfolders (e.g. "Đà Lạt -> Ngày 1", "Đà Lạt -> Ngày 2")
       const childSubfolders = await getSubfoldersOf(folder.id);
 
@@ -639,6 +678,10 @@ export async function scanGoogleDriveFoldersAndPhotos(
 
       // Photos inside each child subfolder
       for (const child of childSubfolders) {
+        if (photosCollected >= MAX_SCAN_PHOTOS) {
+          truncated = true;
+          break;
+        }
         const childPhotos = await getImagesOf(child.id, folder.id, folder.name, child.name);
         subfolderMetaList.push({
           id: child.id,
@@ -694,6 +737,7 @@ export async function scanGoogleDriveFoldersAndPhotos(
       photosFolderUrl,
       totalPhotosCount: allCollectedPhotos.length,
       totalFoldersCount: scannedFolders.length,
+      truncated,
     };
   } catch (err: any) {
     console.error('scanGoogleDriveFoldersAndPhotos Error:', err);

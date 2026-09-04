@@ -433,10 +433,17 @@ export const PhotoAlbumView: React.FC = () => {
       }
 
       soundService.playSparkle();
-      setDriveScanFeedback(
-        `✓ Đã đồng bộ ${scanResult.totalFoldersCount || 0} thư mục và ${scanResult.totalPhotosCount || 0} ảnh từ Google Drive!`
-      );
-      setTimeout(() => setDriveScanFeedback(null), 6000);
+      if (scanResult.truncated) {
+        setDriveScanFeedback(
+          `⚠️ Thư mục này có quá nhiều ảnh — chỉ quét được ${scanResult.totalPhotosCount || 0} ảnh đầu (giới hạn an toàn 500 ảnh/lần). Có vẻ đây không phải thư mục album riêng cho app — hãy đổi sang một thư mục nhỏ hơn dành riêng cho album chung (Cài đặt → Đổi Link Thư Mục Drive) để tránh lỗi đồng bộ.`
+        );
+        setTimeout(() => setDriveScanFeedback(null), 12000);
+      } else {
+        setDriveScanFeedback(
+          `✓ Đã đồng bộ ${scanResult.totalFoldersCount || 0} thư mục và ${scanResult.totalPhotosCount || 0} ảnh từ Google Drive!`
+        );
+        setTimeout(() => setDriveScanFeedback(null), 6000);
+      }
     } catch (err) {
       console.warn('Scan Google Drive error:', err);
       setDriveScanFeedback('Không thể quét thư mục Google Drive lúc này.');
