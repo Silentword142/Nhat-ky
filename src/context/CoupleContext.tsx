@@ -399,7 +399,13 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [isPartnerOnline, setIsPartnerOnline] = useState<boolean>(false);
   const [isPartnerTyping, setIsPartnerTyping] = useState<boolean>(false);
   const [incomingHeartbeat, setIncomingHeartbeat] = useState<HeartbeatPulse | null>(null);
-  const [syncStatus, setSyncStatus] = useState<'connected' | 'connecting' | 'offline'>('offline');
+  // Optimistic initial value: if we already have a paired room code from a previous session,
+  // assume we're online immediately instead of flashing "Đang kết nối lại..." for the brief
+  // moment before the first realtime snapshot confirms it. The room-join effect below corrects
+  // this to 'offline' right away if there's genuinely no authenticated room to join.
+  const [syncStatus, setSyncStatus] = useState<'connected' | 'connecting' | 'offline'>(
+    settings.roomCode && settings.roomCode.trim().length > 0 ? 'connected' : 'offline'
+  );
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [partnerAccountInfo, setPartnerAccountInfo] = useState<{
     username?: string;
@@ -657,7 +663,19 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       // 6. Partner Profile & Online presence
       if (data.profiles && typeof data.profiles === 'object') {
-        const partnerId = Object.keys(data.profiles).find((id) => id !== myUserId);
+        // `profiles` is only ever merged into, never pruned, so a room that has seen a guest
+        // session, a re-login, or an old device can end up with more than one non-self key. Just
+        // taking the first such key risked picking a stale leftover profile instead of the
+        // partner's current one — e.g. showing their old avatar forever, even after they update
+        // it, because the update lands under a different (correct) key than the one being read.
+        // Always pick whichever non-self entry was active most recently.
+        const candidateIds = Object.keys(data.profiles).filter((id) => id !== myUserId);
+        const partnerId =
+          candidateIds.length <= 1
+            ? candidateIds[0]
+            : candidateIds.reduce((freshest, id) =>
+                (data.profiles[id]?.lastActive || 0) > (data.profiles[freshest]?.lastActive || 0) ? id : freshest
+              );
         if (partnerId && data.profiles[partnerId]) {
           const p = data.profiles[partnerId];
           setPartnerProfileState(p);
