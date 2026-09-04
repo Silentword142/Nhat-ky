@@ -259,11 +259,17 @@ export const PhotoAlbumView: React.FC = () => {
       setActiveCustomFolder(saved);
       setCustomFolderVerifyResult(saved ? { id: saved.id, name: finalName, url: saved.url } : null);
       soundService.playSparkle();
-      setDriveScanFeedback(`✓ Đã đổi đường dẫn lưu ảnh sang thư mục "${finalName}"!`);
+      // Deliberately NOT auto-scanning here. A custom folder is very often a general personal
+      // Drive folder (camera roll backups etc.), not a small folder made just for this app — an
+      // automatic full scan right after linking it is exactly what silently hung/broke sync the
+      // last time. Saving the link is enough on its own (new uploads go there, "Mở Google Drive"
+      // points there); scanning existing photos into the shared album is now a separate,
+      // explicit action the user opts into via "Quét Thư Mục Drive".
+      setDriveScanFeedback(`✓ Đã lưu đường dẫn thư mục "${finalName}"! Ảnh mới tải lên sẽ vào đây. Bấm "Quét Thư Mục Drive" nếu muốn đồng bộ ảnh có sẵn (thư mục lớn chỉ đồng bộ được một phần).`);
       setTimeout(() => {
         setIsDriveFolderModalOpen(false);
-        handleScanDriveFolders(true);
-      }, 1200);
+        setDriveScanFeedback(null);
+      }, 6000);
     } catch (err: any) {
       setCustomFolderVerifyError(err.message || 'Lỗi kiểm tra thư mục Google Drive.');
     } finally {
@@ -453,12 +459,15 @@ export const PhotoAlbumView: React.FC = () => {
     }
   }, [myProfile.id, myProfile.name, photos, addPhotosBatch]);
 
-  // Auto scan once on mount if drive is connected
+  // Auto scan once on mount if Drive is connected — but only when using the app's own default
+  // folder. A custom folder (set via "Đổi Link Thư Mục Drive") is very often a general personal
+  // Drive folder rather than one made just for this app, so it should never be scanned without
+  // the user explicitly asking for it via the "Quét Thư Mục Drive" button.
   useEffect(() => {
-    if (isGoogleDriveConnected) {
+    if (isGoogleDriveConnected && !activeCustomFolder) {
       handleScanDriveFolders(false);
     }
-  }, [isGoogleDriveConnected]);
+  }, [isGoogleDriveConnected, activeCustomFolder]);
 
   // Prepare images for Lightbox
   const lightboxItems: LightboxImageItem[] = useMemo(() => {
