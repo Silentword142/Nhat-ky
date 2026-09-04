@@ -1158,14 +1158,42 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setIncomingHeartbeat(null);
       }
 
-      // 1. Call server API to perform server-side migration or separation
+      // 1. requestChangeRoomCode only repoints the ACCOUNT records (users/{username}.roomCode)
+      // at the new code — it never touches the room documents themselves. Without copying the
+      // actual room content across, the new room starts completely empty on Firestore: the
+      // partner (who always reads straight from Firestore) sees nothing migrate over, while the
+      // switching device itself still shows everything because mergeWithAuthoritativeRemote
+      // preserves its own in-memory cache — making it look like the migration worked when it
+      // silently didn't. Write this device's current room content into the new room doc first.
+      try {
+        const newRoomDocRef = doc(db, 'rooms', cleanCode);
+        const migratedPayload = stripHeavyInlineDataForCloudSync({
+          roomCode: cleanCode,
+          diaries,
+          photos,
+          cards,
+          anniversaries,
+          settings: { ...settings, roomCode: cleanCode },
+          profiles: {
+            [myUserId]: { ...myProfileRef.current, id: myUserId, lastActive: Date.now() },
+          },
+          updatedAt: Date.now(),
+        });
+        await setDoc(newRoomDocRef, migratedPayload, { merge: true });
+      } catch (err) {
+        console.warn('Room data migration error:', err);
+      }
+
+      // 2. Call server API to perform any server-side migration or separation bookkeeping
+      // (account roomCode repointing) — best-effort, harmless no-op on static hosting.
       try {
         await requestChangeRoomCode(oldCode, cleanCode, myUserId, migratePartner);
       } catch (err) {
         console.warn('requestChangeRoomCode error:', err);
       }
 
-      // 2. Update local state
+      // 3. Update local state
+      hasUserMutatedRef.current = false;
       setSettingsState((prev) => {
         const nextSettings = { ...prev, roomCode: cleanCode };
         try {
@@ -1176,7 +1204,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       return true;
     },
-    [settings.roomCode, myUserId, partnerAccountInfo]
+    [settings, myUserId, partnerAccountInfo, diaries, photos, cards, anniversaries]
   );
 
   // Leave room / disconnect from current room and start fresh private room
@@ -1198,6 +1226,23 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setIsPartnerOnline(false);
     setIsPartnerTyping(false);
     setIncomingHeartbeat(null);
+
+    // 1b. Clear this device's local cache of the old room's content. The old room's data on
+    // Firestore is untouched (nothing is deleted there), but without clearing local state here,
+    // mergeWithAuthoritativeRemote would keep showing the old room's diaries/photos/cards on this
+    // device even after switching to a brand-new, genuinely empty private room — and any new
+    // mutation made from that stale view would leak the old room's data into the new one.
+    hasUserMutatedRef.current = false;
+    setDiaries([]);
+    setPhotos([]);
+    setCards([]);
+    setAnniversaries([]);
+    try {
+      localStorage.removeItem(`${STORAGE_KEY_PREFIX}diaries`);
+      localStorage.removeItem(`${STORAGE_KEY_PREFIX}photos`);
+      localStorage.removeItem(`${STORAGE_KEY_PREFIX}cards`);
+      localStorage.removeItem(`${STORAGE_KEY_PREFIX}anniversaries`);
+    } catch {}
 
     // 2. Notify server to remove this user from the old room
     try {
