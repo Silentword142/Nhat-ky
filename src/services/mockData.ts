@@ -11,7 +11,9 @@ export const initialMyProfile: CoupleProfile = {
   mood: '🌸',
   statusText: '',
   locationEmoji: '',
-  gender: 'female',
+  // Neutral by default — the Flo cycle tracker only appears once someone explicitly picks
+  // "Nữ" in their profile (see ProfileModal), so a guest profile shouldn't default to it.
+  gender: 'other',
   birthday: '',
   authProvider: 'guest',
   lastActive: Date.now(),

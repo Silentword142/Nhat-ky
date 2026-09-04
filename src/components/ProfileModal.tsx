@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { X, Upload, Check, Camera, Smile, MapPin, Sparkles, Crop } from 'lucide-react';
 import { useCouple } from '../context/CoupleContext';
+import { CoupleProfile } from '../types';
 import { soundService } from '../services/sound';
 import { compressImageFile, CUTE_AVATARS } from '../utils/image';
 import { DEFAULT_AVATAR_ME } from '../services/mockData';
@@ -26,6 +27,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
   const [statusText, setStatusText] = useState(myProfile.statusText || '');
   const [locationEmoji, setLocationEmoji] = useState(myProfile.locationEmoji || '📍 Việt Nam');
   const [birthday, setBirthday] = useState(myProfile.birthday || '');
+  const [gender, setGender] = useState<CoupleProfile['gender'] | ''>(myProfile.gender || '');
   const [isSaving, setIsSaving] = useState(false);
   const [success, setSuccess] = useState(false);
 
@@ -77,6 +79,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
       statusText: statusText.trim(),
       locationEmoji: locationEmoji.trim(),
       birthday: birthday || undefined,
+      gender: gender || undefined,
     });
 
     setSuccess(true);
@@ -264,6 +267,39 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
                 placeholder="dd/mm/yyyy"
                 showZodiac={true}
               />
+            </div>
+          </div>
+
+          {/* Gender (unlocks the Flo cycle tracker for whoever selects "Nữ") */}
+          <div>
+            <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1.5 font-cute">
+              Giới tính (để mở tính năng theo dõi chu kỳ Flo)
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {(
+                [
+                  { value: 'female', label: 'Nữ', emoji: '♀️' },
+                  { value: 'male', label: 'Nam', emoji: '♂️' },
+                  { value: 'other', label: 'Khác', emoji: '💖' },
+                ] as { value: CoupleProfile['gender']; label: string; emoji: string }[]
+              ).map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => {
+                    soundService.playPop();
+                    setGender(opt.value);
+                  }}
+                  className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                    gender === opt.value
+                      ? 'bg-rose-500 text-white shadow-sm scale-[1.02]'
+                      : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-rose-50 dark:hover:bg-zinc-700'
+                  }`}
+                >
+                  <span>{opt.emoji}</span>
+                  <span>{opt.label}</span>
+                </button>
+              ))}
             </div>
           </div>
 

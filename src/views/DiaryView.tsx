@@ -734,7 +734,8 @@ export const DiaryView: React.FC = () => {
         {/* 1. LOVE CALENDAR & FLO CYCLE TRACKER (4 COLS)                             */}
         {/* ========================================================================= */}
         <div className="lg:col-span-4 space-y-4">
-          {/* FLO CYCLE QUICK GLANCE WIDGET */}
+          {/* FLO CYCLE QUICK GLANCE WIDGET — only for whoever set their gender to "Nữ" in profile */}
+          {myProfile.gender === 'female' && (
           <div className="bg-gradient-to-br from-rose-500/10 via-pink-500/5 to-purple-500/10 dark:from-rose-950/40 dark:via-zinc-900 dark:to-purple-950/30 rounded-3xl p-4.5 border border-rose-200/80 dark:border-zinc-800 shadow-md space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -785,6 +786,7 @@ export const DiaryView: React.FC = () => {
               <span>{selectedDayCycleInfo.partnerCareTip}</span>
             </p>
           </div>
+          )}
 
           {/* CALENDAR CARD */}
           <div className="bg-white dark:bg-zinc-900 rounded-3xl p-5 border border-rose-100 dark:border-zinc-800 shadow-lg space-y-4">
@@ -854,10 +856,11 @@ export const DiaryView: React.FC = () => {
                   return <div key={`empty_${idx}`} className="h-10 sm:h-11" />;
                 }
 
-                // Flo highlight styling
-                const isPeriodDay = item.isPeriod;
-                const isOvulationDay = item.isOvulation;
-                const isFertileDay = item.isFertile;
+                // Flo highlight styling — only meaningful for whoever set gender to "Nữ"
+                const isFloEnabled = myProfile.gender === 'female';
+                const isPeriodDay = isFloEnabled && item.isPeriod;
+                const isOvulationDay = isFloEnabled && item.isOvulation;
+                const isFertileDay = isFloEnabled && item.isFertile;
 
                 return (
                   <button
@@ -918,20 +921,24 @@ export const DiaryView: React.FC = () => {
               })}
             </div>
 
-            {/* Calendar Flo Legend */}
+            {/* Calendar Legend */}
             <div className="pt-2 flex items-center justify-center gap-3 text-[10px] text-zinc-500 dark:text-zinc-400 border-t border-rose-100/70 dark:border-zinc-800 flex-wrap font-cute">
-              <span className="flex items-center gap-1">
-                <span>🩸</span>
-                <span>Kỳ kinh</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <span>🌸</span>
-                <span>Rụng trứng</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <span>✨</span>
-                <span>Thụ thai</span>
-              </span>
+              {myProfile.gender === 'female' && (
+                <>
+                  <span className="flex items-center gap-1">
+                    <span>🩸</span>
+                    <span>Kỳ kinh</span>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span>🌸</span>
+                    <span>Rụng trứng</span>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span>✨</span>
+                    <span>Thụ thai</span>
+                  </span>
+                </>
+              )}
               <span className="flex items-center gap-1">
                 <span>💖</span>
                 <span>Kỷ niệm</span>
