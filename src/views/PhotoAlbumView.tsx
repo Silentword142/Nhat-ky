@@ -41,6 +41,7 @@ import {
   uploadOriginalImageToDrive,
   uploadDataUrlImageToDrive,
   scanGoogleDriveFoldersAndPhotos,
+  loadDriveFolderPage,
   getCustomPhotosFolder,
   setCustomPhotosFolder,
   clearCustomPhotosFolder,
@@ -140,6 +141,17 @@ export const PhotoAlbumView: React.FC = () => {
   const [driveScanFeedback, setDriveScanFeedback] = useState<string | null>(null);
   const [activeSubfolder, setActiveSubfolder] = useState<string | null>(null);
 
+  // Paginated loading for a custom (usually large/personal) Drive folder — loads a fixed 100
+  // photos per click instead of scanning the whole folder, so a huge personal folder never
+  // triggers one giant scan; the user controls exactly how much gets pulled in, one page at a
+  // time, up to the same safety cap the deep scan uses.
+  const CUSTOM_FOLDER_PAGE_SIZE = 100;
+  const CUSTOM_FOLDER_IMPORT_CAP = 500;
+  const [customFolderNextPageToken, setCustomFolderNextPageToken] = useState<string | undefined>(undefined);
+  const [isLoadingCustomFolderPage, setIsLoadingCustomFolderPage] = useState(false);
+  const [customFolderImportedCount, setCustomFolderImportedCount] = useState(0);
+  const [customFolderHasStartedLoading, setCustomFolderHasStartedLoading] = useState(false);
+
   // Selected Album: null = Folder Overview list, 'all' = All photos, or album ID/name
   const [activeAlbumId, setActiveAlbumId] = useState<string | null>(null);
 
@@ -220,6 +232,9 @@ export const PhotoAlbumView: React.FC = () => {
       setActiveCustomFolder(null);
       setCustomFolderVerifyResult(null);
       setCustomFolderVerifyError(null);
+      setCustomFolderNextPageToken(undefined);
+      setCustomFolderImportedCount(0);
+      setCustomFolderHasStartedLoading(false);
       soundService.playSparkle();
       setDriveScanFeedback('✓ Đã khôi phục về thư mục ảnh mặc định của LoveSync!');
       setIsDriveFolderModalOpen(false);
@@ -258,14 +273,18 @@ export const PhotoAlbumView: React.FC = () => {
       const saved = setCustomPhotosFolder(details.id, finalName);
       setActiveCustomFolder(saved);
       setCustomFolderVerifyResult(saved ? { id: saved.id, name: finalName, url: saved.url } : null);
+      // Reset pagination — a page token from whichever folder was active before is meaningless here
+      setCustomFolderNextPageToken(undefined);
+      setCustomFolderImportedCount(0);
+      setCustomFolderHasStartedLoading(false);
       soundService.playSparkle();
-      // Deliberately NOT auto-scanning here. A custom folder is very often a general personal
+      // Deliberately NOT auto-loading here. A custom folder is very often a general personal
       // Drive folder (camera roll backups etc.), not a small folder made just for this app — an
       // automatic full scan right after linking it is exactly what silently hung/broke sync the
       // last time. Saving the link is enough on its own (new uploads go there, "Mở Google Drive"
-      // points there); scanning existing photos into the shared album is now a separate,
-      // explicit action the user opts into via "Quét Thư Mục Drive".
-      setDriveScanFeedback(`✓ Đã lưu đường dẫn thư mục "${finalName}"! Ảnh mới tải lên sẽ vào đây. Bấm "Quét Thư Mục Drive" nếu muốn đồng bộ ảnh có sẵn (thư mục lớn chỉ đồng bộ được một phần).`);
+      // points there); pulling in existing photos is now a separate, explicit action — the user
+      // clicks "Tải 100 Ảnh Tiếp Theo" as many times as they want, 100 photos at a time.
+      setDriveScanFeedback(`✓ Đã lưu đường dẫn thư mục "${finalName}"! Ảnh mới tải lên sẽ vào đây. Bấm "Tải 100 Ảnh Tiếp Theo" nếu muốn xem ảnh có sẵn trong thư mục này.`);
       setTimeout(() => {
         setIsDriveFolderModalOpen(false);
         setDriveScanFeedback(null);
@@ -285,6 +304,9 @@ export const PhotoAlbumView: React.FC = () => {
     setCustomFolderNameInput('');
     setCustomFolderVerifyResult(null);
     setCustomFolderVerifyError(null);
+    setCustomFolderNextPageToken(undefined);
+    setCustomFolderImportedCount(0);
+    setCustomFolderHasStartedLoading(false);
     soundService.playSparkle();
     setDriveScanFeedback('✓ Đã khôi phục về thư mục ảnh mặc định của LoveSync!');
     setIsDriveFolderModalOpen(false);
@@ -458,6 +480,72 @@ export const PhotoAlbumView: React.FC = () => {
       setIsScanningDrive(false);
     }
   }, [myProfile.id, myProfile.name, photos, addPhotosBatch]);
+
+  // Load exactly one page (100 photos) from the active custom Drive folder. Call again with the
+  // token this returns to keep going — the user decides how many pages to pull in, rather than
+  // the app scanning the whole (possibly huge) folder in one shot.
+  const handleLoadNextCustomFolderPage = useCallback(async () => {
+    if (!activeCustomFolder) return;
+    if (customFolderImportedCount >= CUSTOM_FOLDER_IMPORT_CAP) return;
+
+    try {
+      setIsLoadingCustomFolderPage(true);
+      let token = await getAccessToken();
+      if (!token) {
+        const res = await googleSignIn();
+        token = res?.accessToken || null;
+      }
+      if (!token) {
+        alert('Vui lòng kết nối Google Drive để tải ảnh từ thư mục.');
+        return;
+      }
+
+      const pageResult = await loadDriveFolderPage(
+        token,
+        activeCustomFolder.id,
+        customFolderNextPageToken,
+        CUSTOM_FOLDER_PAGE_SIZE,
+        myProfile.id,
+        myProfile.name
+      );
+
+      if (!pageResult.success) {
+        setDriveScanFeedback(pageResult.error || 'Không thể tải ảnh từ thư mục này.');
+        setTimeout(() => setDriveScanFeedback(null), 5000);
+        return;
+      }
+
+      const existingIds = new Set(photos.map((p) => p.originalFileId || p.id));
+      const newPhotos = pageResult.photos.filter(
+        (p) => !existingIds.has(p.originalFileId) && !existingIds.has(p.id)
+      );
+      if (newPhotos.length > 0) {
+        addPhotosBatch(newPhotos);
+      }
+
+      setCustomFolderNextPageToken(pageResult.nextPageToken);
+      setCustomFolderHasStartedLoading(true);
+      setCustomFolderImportedCount((prev) => {
+        const next = prev + newPhotos.length;
+        soundService.playSparkle();
+        if (next >= CUSTOM_FOLDER_IMPORT_CAP) {
+          setDriveScanFeedback(`✓ Đã tải ${next} ảnh — đạt giới hạn an toàn ${CUSTOM_FOLDER_IMPORT_CAP} ảnh cho một thư mục.`);
+        } else if (!pageResult.nextPageToken) {
+          setDriveScanFeedback(`✓ Đã tải hết ${next} ảnh trong thư mục "${pageResult.folderName || activeCustomFolder.name}".`);
+        } else {
+          setDriveScanFeedback(`✓ Đã tải thêm ${newPhotos.length} ảnh (tổng ${next}). Bấm "Tải Thêm 100 Ảnh" để tiếp tục.`);
+        }
+        setTimeout(() => setDriveScanFeedback(null), 6000);
+        return next;
+      });
+    } catch (err: any) {
+      console.warn('Load Drive folder page error:', err);
+      setDriveScanFeedback('Không thể tải ảnh từ thư mục Google Drive lúc này.');
+      setTimeout(() => setDriveScanFeedback(null), 4000);
+    } finally {
+      setIsLoadingCustomFolderPage(false);
+    }
+  }, [activeCustomFolder, customFolderNextPageToken, customFolderImportedCount, myProfile.id, myProfile.name, photos, addPhotosBatch]);
 
   // Auto scan once on mount if Drive is connected — but only when using the app's own default
   // folder. A custom folder (set via "Đổi Link Thư Mục Drive") is very often a general personal
@@ -899,16 +987,38 @@ export const PhotoAlbumView: React.FC = () => {
         <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
           {isGoogleDriveConnected ? (
             <>
-              {/* Scan & Open Drive Folders */}
-              <button
-                onClick={() => handleScanDriveFolders(true)}
-                disabled={isScanningDrive}
-                className="px-3.5 py-2 rounded-2xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
-                title="Quét các thư mục và thư mục con từ Google Drive"
-              >
-                <FolderTree className={`w-3.5 h-3.5 ${isScanningDrive ? 'animate-spin' : ''}`} />
-                <span>{isScanningDrive ? 'Đang quét Drive...' : 'Quét Thư Mục Drive'}</span>
-              </button>
+              {/* Scan & Open Drive Folders — deep multi-album scan for the app's own default
+                  folder, or a flat 100-at-a-time page loader for a custom (often personal/large)
+                  folder so it never tries to enumerate everything in one go. */}
+              {activeCustomFolder ? (
+                <button
+                  onClick={handleLoadNextCustomFolderPage}
+                  disabled={isLoadingCustomFolderPage || customFolderImportedCount >= CUSTOM_FOLDER_IMPORT_CAP}
+                  className="px-3.5 py-2 rounded-2xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+                  title={`Tải ${CUSTOM_FOLDER_PAGE_SIZE} ảnh tiếp theo trong thư mục "${activeCustomFolder.name || ''}"`}
+                >
+                  <FolderTree className={`w-3.5 h-3.5 ${isLoadingCustomFolderPage ? 'animate-spin' : ''}`} />
+                  <span>
+                    {isLoadingCustomFolderPage
+                      ? 'Đang tải...'
+                      : customFolderImportedCount >= CUSTOM_FOLDER_IMPORT_CAP
+                      ? `Đã đạt giới hạn ${CUSTOM_FOLDER_IMPORT_CAP} ảnh`
+                      : customFolderHasStartedLoading
+                      ? `Tải Thêm ${CUSTOM_FOLDER_PAGE_SIZE} Ảnh (${customFolderImportedCount} đã tải)`
+                      : `Tải ${CUSTOM_FOLDER_PAGE_SIZE} Ảnh Đầu Tiên`}
+                  </span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleScanDriveFolders(true)}
+                  disabled={isScanningDrive}
+                  className="px-3.5 py-2 rounded-2xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+                  title="Quét các thư mục và thư mục con từ Google Drive"
+                >
+                  <FolderTree className={`w-3.5 h-3.5 ${isScanningDrive ? 'animate-spin' : ''}`} />
+                  <span>{isScanningDrive ? 'Đang quét Drive...' : 'Quét Thư Mục Drive'}</span>
+                </button>
+              )}
 
               <button
                 onClick={openDriveFolderModal}

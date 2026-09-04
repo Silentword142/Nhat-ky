@@ -752,3 +752,95 @@ export async function scanGoogleDriveFoldersAndPhotos(
   }
 }
 
+export interface DriveFolderPageResult {
+  success: boolean;
+  photos: PhotoMemory[];
+  nextPageToken?: string;
+  folderName?: string;
+  error?: string;
+}
+
+/**
+ * Load exactly one page of images directly inside a given Drive folder (no subfolder
+ * recursion — deliberately simple/flat). Meant for browsing a large personal folder a fixed
+ * number of photos at a time instead of scanning everything in it at once: pass the
+ * `nextPageToken` from the previous call back in to continue where it left off.
+ */
+export async function loadDriveFolderPage(
+  accessToken: string,
+  folderId: string,
+  pageToken?: string,
+  pageSize: number = 100,
+  currentUserId?: string,
+  currentUserName?: string
+): Promise<DriveFolderPageResult> {
+  try {
+    const details = await getFolderDetails(accessToken, folderId);
+    const albumName = details?.name || 'Thư mục Drive';
+    const authorId = currentUserId || 'user_drive';
+    const authorName = currentUserName || 'Google Drive';
+
+    const q = `'${folderId}' in parents and mimeType contains 'image/' and trashed = false`;
+    const fields = 'nextPageToken, files(id, name, mimeType, size, webViewLink, webContentLink, thumbnailLink, createdTime, modifiedTime)';
+    let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&orderBy=createdTime desc&pageSize=${Math.max(1, Math.min(1000, pageSize))}&spaces=drive`;
+    if (pageToken) {
+      url += `&pageToken=${encodeURIComponent(pageToken)}`;
+    }
+
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Không thể tải ảnh từ thư mục: ${errText}`);
+    }
+    const data = await res.json();
+    const files: any[] = Array.isArray(data.files) ? data.files : [];
+
+    const photos: PhotoMemory[] = files.map((file) => {
+      const createdMs = file.createdTime ? new Date(file.createdTime).getTime() : Date.now();
+      const dateStr = file.createdTime ? file.createdTime.split('T')[0] : new Date().toISOString().split('T')[0];
+      const directUrl = `https://drive.google.com/thumbnail?id=${file.id}&sz=w2560`;
+      const thumbnailUrl = `https://drive.google.com/thumbnail?id=${file.id}&sz=w500`;
+      const driveViewUrl = file.webViewLink || `https://drive.google.com/file/d/${file.id}/view`;
+      const driveDownloadUrl = `https://drive.google.com/uc?export=download&id=${file.id}`;
+
+      return {
+        id: `drive_photo_${file.id}`,
+        albumId: folderId,
+        albumName,
+        title: file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
+        caption: `Từ thư mục Google Drive "${albumName}"`,
+        imageUrl: directUrl,
+        thumbnailUrl,
+        originalFileId: file.id,
+        driveFolderId: folderId,
+        driveViewUrl,
+        driveDownloadUrl,
+        originalQuality: true,
+        fileSize: file.size ? Number(file.size) : undefined,
+        fileName: file.name,
+        date: dateStr,
+        frameStyle: 'classic' as const,
+        authorId,
+        authorName,
+        likes: [],
+        tags: ['Google Drive', albumName],
+        createdAt: createdMs,
+      };
+    });
+
+    return {
+      success: true,
+      photos,
+      nextPageToken: data.nextPageToken || undefined,
+      folderName: albumName,
+    };
+  } catch (err: any) {
+    console.error('loadDriveFolderPage Error:', err);
+    return {
+      success: false,
+      photos: [],
+      error: err.message || 'Lỗi khi tải ảnh từ thư mục Google Drive.',
+    };
+  }
+}
+
