@@ -20,6 +20,13 @@ try {
     app,
     {
       experimentalAutoDetectLongPolling: true,
+      // Without this, setDoc/updateDoc REJECTS the entire write if any field anywhere in the
+      // payload is `undefined` (e.g. an optional diary "location" left blank becomes
+      // `location: undefined`) — the error was being silently swallowed by every .catch(() => {})
+      // in the sync code, so an untouched optional field could quietly block an entire diary/
+      // photo/card from ever reaching the cloud. This makes Firestore just omit undefined fields
+      // instead of rejecting the whole document.
+      ignoreUndefinedProperties: true,
     },
     configObj.firestoreDatabaseId || '(default)'
   );
