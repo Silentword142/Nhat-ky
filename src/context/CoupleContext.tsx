@@ -843,9 +843,11 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // underlying long-polling/WebChannel connection can occasionally go quiet — a backgrounded
     // tab being throttled, a network blip it doesn't cleanly recover from — with no visible
     // error, since the (error) callback above only fires on an outright failure, not a silent
-    // stall. This does a plain one-off read every 20s as a safety net; if onSnapshot is healthy
-    // this is a harmless no-op (same data back), but if it ever stalls, the room self-corrects
-    // within 20s instead of staying stuck until the user thinks to reload the page.
+    // stall. This does a plain one-off read every few seconds as a tight safety net; if
+    // onSnapshot is healthy this is a harmless no-op (same data back), but if it ever stalls,
+    // the room self-corrects almost immediately instead of staying stuck until the user thinks
+    // to reload the page. Kept short (not 20s+) so any gap in the primary channel is never
+    // noticeable as a "have to refresh" moment.
     const firestoreFallbackInterval = setInterval(async () => {
       if (!isMounted) return;
       try {
@@ -856,7 +858,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch (err) {
         console.warn('[Firestore] Fallback poll notice:', err);
       }
-    }, 20000);
+    }, 3000);
 
     return () => {
       isMounted = false;
