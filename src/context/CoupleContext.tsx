@@ -856,12 +856,22 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // size safeguard, risking pushing the room document over Firestore's 1MiB cap and
         // silently breaking sync for the whole room, partner included.
         const safeAvatar = stripHeavyInlineDataForCloudSync(myProfile.avatar);
+        // IMPORTANT: setDoc (unlike updateDoc) does NOT treat a top-level key containing dots
+        // ("profiles.<id>.lastActive") as a nested field path — it creates a literal field
+        // whose *name* contains those dots. That silently broke partner pairing entirely: the
+        // app always reads a nested `profiles` map, which never actually got created this way,
+        // so it could never find the partner's entry. A plain nested object is what actually
+        // produces (and merges into) a real `profiles.{myUserId}` map entry.
         setDoc(
           roomDocRef,
           {
-            [`profiles.${myUserId}.lastActive`]: nowTime,
-            [`profiles.${myUserId}.name`]: myProfile.name,
-            [`profiles.${myUserId}.avatar`]: safeAvatar,
+            profiles: {
+              [myUserId]: {
+                lastActive: nowTime,
+                name: myProfile.name,
+                avatar: safeAvatar,
+              },
+            },
           },
           { merge: true }
         ).catch(() => {});
@@ -1641,8 +1651,14 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const sendTypingStatus = useCallback(
     (isTyping: boolean) => {
+      // A dotted top-level key here (e.g. "typingStatus.usr_x") is NOT treated as a nested
+      // field path by setDoc — it becomes a literal field name containing dots, and the app
+      // reads a nested `typingStatus` map that would then never actually exist. See the
+      // pingPresence fix for the same bug and why it silently broke partner detection.
       broadcastRoomChanges({
-        [`typingStatus.${myUserId}`]: isTyping,
+        typingStatus: {
+          [myUserId]: isTyping,
+        },
       });
     },
     [myUserId, broadcastRoomChanges]
