@@ -111,7 +111,7 @@ export interface CoupleContextType {
   clearIncomingHeartbeat: () => void;
   sendTypingStatus: (isTyping: boolean) => void;
   roomPlaylist: any[];
-  updateRoomPlaylist: (newPlaylist: any[]) => void;
+  updateRoomPlaylist: (newPlaylist: any[], removedId?: string) => void;
   exportData: () => string;
   importData: (jsonStr: string) => boolean;
 }
@@ -383,7 +383,36 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   });
 
-  const updateRoomPlaylist = useCallback((newPlaylist: any[]) => {
+  // Unlike diaries/photos/cards/anniversaries, the playlist has no per-item merge — it's synced
+  // as one whole array (see applyIncomingRoomData below), which made a delete racy: the Firestore
+  // write from broadcastRoomChanges is fire-and-forget, so a reload (or the realtime listener's
+  // own next snapshot) landing before that write is actually acknowledged could read back the
+  // pre-delete array and silently resurrect the just-removed track. Track ids removed here get
+  // filtered out of every incoming playlist from then on, persisted to localStorage so a reload
+  // right after deleting can't bring it back either — track ids are always freshly minted
+  // (custom_<timestamp>, yt_<videoId>_<timestamp>) or fixed built-in ids, never legitimately
+  // reused, so this can never end up blocking a real re-add.
+  const REMOVED_PLAYLIST_IDS_KEY = 'lovesync_removed_playlist_ids';
+  const removedPlaylistIdsRef = useRef<Set<string>>(
+    (() => {
+      try {
+        const saved = localStorage.getItem(REMOVED_PLAYLIST_IDS_KEY);
+        const parsed = saved ? JSON.parse(saved) : [];
+        return new Set(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        return new Set<string>();
+      }
+    })()
+  );
+
+  const updateRoomPlaylist = useCallback((newPlaylist: any[], removedId?: string) => {
+    if (removedId) {
+      removedPlaylistIdsRef.current.add(removedId);
+      try {
+        localStorage.setItem(REMOVED_PLAYLIST_IDS_KEY, JSON.stringify(Array.from(removedPlaylistIdsRef.current)));
+      } catch {}
+    }
+    hasUserMutatedRef.current = true;
     setRoomPlaylist(newPlaylist);
     try {
       localStorage.setItem('lovesync_full_playlist_v3', JSON.stringify(newPlaylist));
@@ -635,11 +664,16 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         });
       }
 
-      // 4b. Sync Playlist
+      // 4b. Sync Playlist — filter out anything removed locally this session so a stale/racy
+      // read (the delete's own Firestore write hadn't landed yet, or a snapshot arrived out of
+      // order) can never resurrect a track the user just deleted.
       if (Array.isArray(data.playlist) && data.playlist.length > 0) {
-        setRoomPlaylist(data.playlist);
+        const incomingPlaylist = removedPlaylistIdsRef.current.size > 0
+          ? data.playlist.filter((t: any) => !t?.id || !removedPlaylistIdsRef.current.has(t.id))
+          : data.playlist;
+        setRoomPlaylist(incomingPlaylist);
         try {
-          localStorage.setItem('lovesync_full_playlist_v3', JSON.stringify(data.playlist));
+          localStorage.setItem('lovesync_full_playlist_v3', JSON.stringify(incomingPlaylist));
         } catch {}
       }
 
