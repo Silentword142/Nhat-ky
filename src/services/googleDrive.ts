@@ -348,19 +348,19 @@ export async function makeDriveFilePublic(accessToken: string, fileId: string): 
 }
 
 /**
- * Upload an original image file to its dedicated album subfolder in Google Drive
- * Saves at 100% original quality with no compression loss and pristine binary preservation!
+ * Core upload: write raw file bytes directly into a known Drive folder ID. Shared by both the
+ * app's own album uploads (folder resolved by name via findOrCreateAlbumFolder) and uploads
+ * targeting an existing personal folder the user linked in (folder ID already known, must never
+ * be recreated by name).
  */
-export async function uploadOriginalImageToDrive(
+async function uploadBytesToDriveFolder(
   accessToken: string,
   fileOrBlob: File | Blob,
   fileName: string,
-  albumName: string
+  folderId: string,
+  description: string
 ): Promise<DrivePhotoUploadResult> {
   try {
-    // 1. Find or create the album subfolder
-    const { folderId, folderUrl } = await findOrCreateAlbumFolder(accessToken, albumName);
-
     // 2. Prepare file binary data
     const arrayBuffer = await fileOrBlob.arrayBuffer();
     const bytes = new Uint8Array(arrayBuffer);
@@ -376,7 +376,7 @@ export async function uploadOriginalImageToDrive(
       name: cleanFileName,
       mimeType: mimeType,
       parents: [folderId],
-      description: `Ảnh kỷ niệm album "${albumName}" - Đăng tải chất lượng gốc`,
+      description,
     };
 
     const metadataPart = new TextEncoder().encode(
@@ -436,17 +436,81 @@ export async function uploadOriginalImageToDrive(
       webViewLink,
       downloadUrl,
       folderId,
-      folderUrl,
-      albumName,
       fileName: cleanFileName,
       fileSize: fileOrBlob.size,
       mimeType,
     };
   } catch (err: any) {
-    console.error('uploadOriginalImageToDrive Error:', err);
+    console.error('uploadBytesToDriveFolder Error:', err);
     return {
       success: false,
       error: err.message || 'Lỗi không xác định khi lưu ảnh lên Google Drive',
+    };
+  }
+}
+
+/**
+ * Upload an original image file to its dedicated album subfolder in Google Drive (folder
+ * resolved/created by album name under the app's own Photos root).
+ * Saves at 100% original quality with no compression loss and pristine binary preservation!
+ */
+export async function uploadOriginalImageToDrive(
+  accessToken: string,
+  fileOrBlob: File | Blob,
+  fileName: string,
+  albumName: string
+): Promise<DrivePhotoUploadResult> {
+  const { folderId, folderUrl } = await findOrCreateAlbumFolder(accessToken, albumName);
+  const result = await uploadBytesToDriveFolder(
+    accessToken,
+    fileOrBlob,
+    fileName,
+    folderId,
+    `Ảnh kỷ niệm album "${albumName}" - Đăng tải chất lượng gốc`
+  );
+  return result.success ? { ...result, folderUrl, albumName } : result;
+}
+
+/**
+ * Upload an original image file directly into an EXISTING Drive folder by ID — used for a
+ * personal Drive folder the user linked in as a "stream album": the folder must never be
+ * recreated/renamed by findOrCreateAlbumFolder, the file just needs to land inside the folder
+ * that's already there so it shows up both in the app and in the user's own Drive.
+ */
+export async function uploadImageToExistingDriveFolder(
+  accessToken: string,
+  fileOrBlob: File | Blob,
+  fileName: string,
+  folderId: string,
+  folderName?: string
+): Promise<DrivePhotoUploadResult> {
+  return uploadBytesToDriveFolder(
+    accessToken,
+    fileOrBlob,
+    fileName,
+    folderId,
+    folderName ? `Ảnh được thêm vào thư mục Drive cá nhân "${folderName}"` : 'Ảnh được thêm vào thư mục Drive cá nhân'
+  );
+}
+
+/**
+ * Same as uploadImageToExistingDriveFolder but from a base64 Data URL source.
+ */
+export async function uploadDataUrlImageToExistingDriveFolder(
+  accessToken: string,
+  dataUrl: string,
+  fileName: string,
+  folderId: string,
+  folderName?: string
+): Promise<DrivePhotoUploadResult> {
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    return await uploadImageToExistingDriveFolder(accessToken, blob, fileName, folderId, folderName);
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err.message || 'Không thể chuyển đổi data URL sang Google Drive.',
     };
   }
 }

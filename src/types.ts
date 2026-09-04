@@ -141,6 +141,13 @@ export interface Album {
   parentFolderName?: string;
   subfolders?: Array<{ id: string; name: string; driveFolderId: string; photoCount?: number }>;
   isDriveFolder?: boolean;
+  // A "stream" album is backed by a folder in the user's own personal Google Drive (linked via
+  // "Đổi Link Thư Mục Drive"), often huge (hundreds of thousands of photos). Its photos are never
+  // fetched in full or written to Firestore — the app streams them live, 100 at a time, straight
+  // from Drive whenever the album is opened.
+  isStreamAlbum?: boolean;
+  approxPhotoCount?: number;
+  hasMorePhotosThanCounted?: boolean;
 }
 
 export interface PhotoMemory {

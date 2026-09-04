@@ -40,6 +40,8 @@ import { ImageLightbox, LightboxImageItem } from '../components/ImageLightbox';
 import {
   uploadOriginalImageToDrive,
   uploadDataUrlImageToDrive,
+  uploadImageToExistingDriveFolder,
+  uploadDataUrlImageToExistingDriveFolder,
   scanGoogleDriveFoldersAndPhotos,
   loadDriveFolderPage,
   scanDriveFolderStructure,
@@ -143,21 +145,21 @@ export const PhotoAlbumView: React.FC = () => {
   const [driveScanFeedback, setDriveScanFeedback] = useState<string | null>(null);
   const [activeSubfolder, setActiveSubfolder] = useState<string | null>(null);
 
-  // A custom photos folder (often a large personal Drive folder) is browsed LIVE, never synced:
-  // the folder *structure* (names/subfolders) is scanned once — cheap, no photos fetched — and
-  // opening a specific folder streams its photos straight from Drive, 100 at a time, kept only
-  // in this component's own state. None of it ever touches addPhotosBatch/Firestore, so it costs
-  // nothing against the Firebase free tier no matter how large the personal folder is.
+  // A custom photos folder (often a large personal Drive folder) becomes real albums in
+  // `albumsList` — one per Drive subfolder — but is "streamed" rather than synced: its structure
+  // (names/counts) is scanned once, cheap, and opening one of these albums fetches its photos
+  // straight from Drive, 100 at a time, kept only in this component's own state (`liveDrivePhotos`
+  // below). None of it ever touches addPhotosBatch/Firestore, so it costs nothing against the
+  // Firebase free tier no matter how large the personal folder is. Uploading INTO one of these
+  // albums does write the file into the real Drive folder (so it's visible outside the app too),
+  // but still never touches Firestore. Deleting a photo from one only removes it from this local
+  // view — the original file in the user's Drive folder is never touched.
   const DRIVE_VIEW_PAGE_SIZE = 100;
-  const [driveOnlyFolders, setDriveOnlyFolders] = useState<DriveFolderNode[]>([]);
   const [isScanningDriveStructure, setIsScanningDriveStructure] = useState(false);
-  const [driveStructureTruncated, setDriveStructureTruncated] = useState(false);
   const [viewingDriveFolder, setViewingDriveFolder] = useState<{ id: string; name: string } | null>(null);
   const [liveDrivePhotos, setLiveDrivePhotos] = useState<PhotoMemory[]>([]);
   const [liveDriveNextPageToken, setLiveDriveNextPageToken] = useState<string | undefined>(undefined);
   const [isLoadingLiveDrivePhotos, setIsLoadingLiveDrivePhotos] = useState(false);
-  const [liveDriveLightboxOpen, setLiveDriveLightboxOpen] = useState(false);
-  const [liveDriveLightboxIndex, setLiveDriveLightboxIndex] = useState(0);
 
   // Selected Album: null = Folder Overview list, 'all' = All photos, or album ID/name
   const [activeAlbumId, setActiveAlbumId] = useState<string | null>(null);
@@ -334,6 +336,8 @@ export const PhotoAlbumView: React.FC = () => {
     return albumsList.find((a) => a.id === activeAlbumId || a.name === activeAlbumId) || null;
   }, [activeAlbumId, albumsList]);
 
+  const streamAlbumCount = useMemo(() => albumsList.filter((a) => a.isStreamAlbum).length, [albumsList]);
+
   // Available subfolders for the current album
   const currentAlbumSubfolders = useMemo(() => {
     if (!currentAlbumObj) return [];
@@ -357,6 +361,27 @@ export const PhotoAlbumView: React.FC = () => {
 
   // Filtered photos for view with search and sorting
   const currentViewPhotos = useMemo(() => {
+    // A stream album's photos are never in the synced `photos` array — liveDrivePhotos already
+    // holds exactly this album's currently-fetched pages (streamed straight from Drive), so no
+    // further album-id filtering is needed or possible.
+    if (currentAlbumObj?.isStreamAlbum) {
+      let streamResult = liveDrivePhotos;
+      if (searchKeyword.trim()) {
+        const kw = searchKeyword.toLowerCase().trim();
+        streamResult = streamResult.filter(
+          (p) =>
+            p.title?.toLowerCase().includes(kw) ||
+            p.caption?.toLowerCase().includes(kw) ||
+            p.fileName?.toLowerCase().includes(kw) ||
+            p.date?.includes(kw)
+        );
+      }
+      if (sortBy === 'oldest') {
+        return [...streamResult].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      }
+      return streamResult;
+    }
+
     let result = photos;
     if (activeAlbumId && activeAlbumId !== 'all') {
       const albumName = currentAlbumObj?.name || activeAlbumId;
@@ -399,27 +424,12 @@ export const PhotoAlbumView: React.FC = () => {
       const timeB = b.createdAt || (b.date ? new Date(b.date).getTime() : 0);
       return timeB - timeA;
     });
-  }, [photos, activeAlbumId, currentAlbumObj, activeSubfolder, searchKeyword, sortBy]);
+  }, [photos, liveDrivePhotos, activeAlbumId, currentAlbumObj, activeSubfolder, searchKeyword, sortBy]);
 
   // Sliced photos for instant, smooth rendering (prevents DOM freeze with 2000+ photos)
   const visiblePhotos = useMemo(() => {
     return currentViewPhotos.slice(0, visiblePhotoCount);
   }, [currentViewPhotos, visiblePhotoCount]);
-
-  // Infinite scroll intersection observer: automatically load next batch when scrolling near bottom
-  useEffect(() => {
-    if (!sentinelRef.current) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && visiblePhotoCount < currentViewPhotos.length) {
-          setVisiblePhotoCount((prev) => Math.min(prev + PHOTOS_PAGE_SIZE, currentViewPhotos.length));
-        }
-      },
-      { rootMargin: '600px' }
-    );
-    observer.observe(sentinelRef.current);
-    return () => observer.disconnect();
-  }, [visiblePhotoCount, currentViewPhotos.length]);
 
   // Scan Drive Folders handler
   const handleScanDriveFolders = useCallback(async (showNotice = true) => {
@@ -496,9 +506,10 @@ export const PhotoAlbumView: React.FC = () => {
     }
   }, [myProfile.id, myProfile.name, photos, addPhotosBatch]);
 
-  // Scan only the FOLDER STRUCTURE (names/subfolders) of the active custom Drive folder — no
-  // photos are fetched or stored anywhere here, so this is safe and cheap to run against even a
-  // huge personal folder.
+  // Scan the FOLDER STRUCTURE (names/subfolders/approx counts) of the active custom Drive folder
+  // — no photos are fetched here — and turn every folder found (top-level + one level of
+  // subfolders) into a real "stream" album in albumsList, so they show up and behave just like
+  // any other album card. Cheap and safe to run against even a huge personal folder.
   const handleScanCustomFolderStructure = useCallback(async () => {
     if (!activeCustomFolder) return;
     try {
@@ -520,13 +531,45 @@ export const PhotoAlbumView: React.FC = () => {
         return;
       }
 
-      setDriveOnlyFolders(result.folders);
-      setDriveStructureTruncated(!!result.truncated);
+      const flattened: Album[] = [];
+      const visit = (node: DriveFolderNode, parent?: DriveFolderNode) => {
+        flattened.push({
+          id: `stream_${node.id}`,
+          name: node.name,
+          description: parent ? `Thư mục con của "${parent.name}"` : `Thư mục cá nhân "${activeCustomFolder.name}"`,
+          color: '#34D399',
+          createdAt: Date.now(),
+          driveFolderId: node.id,
+          driveFolderUrl: node.driveFolderUrl,
+          parentFolderId: parent?.id,
+          parentFolderName: parent?.name,
+          isDriveFolder: true,
+          isStreamAlbum: true,
+          approxPhotoCount: node.approxPhotoCount,
+          hasMorePhotosThanCounted: node.hasMorePhotosThanCounted,
+        });
+        node.subfolders.forEach((child) => visit(child, node));
+      };
+      result.folders.forEach((node) => visit(node));
+
+      setAlbumsList((prev) => {
+        const updated = [...prev];
+        for (const alb of flattened) {
+          const idx = updated.findIndex((a) => a.driveFolderId === alb.driveFolderId && a.isStreamAlbum);
+          if (idx >= 0) {
+            updated[idx] = { ...updated[idx], ...alb, id: updated[idx].id, coverImage: updated[idx].coverImage, color: updated[idx].color || alb.color };
+          } else {
+            updated.push(alb);
+          }
+        }
+        return updated;
+      });
+
       soundService.playSparkle();
       setDriveScanFeedback(
         result.truncated
-          ? `✓ Đã tìm thấy ${result.folders.length} thư mục (thư mục có rất nhiều thư mục con, chỉ hiện một phần).`
-          : `✓ Đã tìm thấy ${result.folders.length} thư mục con. Bấm vào một thư mục để xem ảnh (chỉ xem, không lưu vào Firebase).`
+          ? `✓ Đã thêm ${flattened.length} album từ thư mục cá nhân (có rất nhiều thư mục con, chỉ quét được một phần).`
+          : `✓ Đã thêm ${flattened.length} album từ thư mục cá nhân "${activeCustomFolder.name}" vào danh sách album!`
       );
       setTimeout(() => setDriveScanFeedback(null), 7000);
     } catch (err: any) {
@@ -540,10 +583,10 @@ export const PhotoAlbumView: React.FC = () => {
 
   // Open a specific Drive folder for LIVE viewing (first page of photos). Nothing here is ever
   // written to addPhotosBatch/Firestore — it's held only in this component's own state, gone the
-  // moment the user navigates away.
+  // moment the user navigates away. Triggered automatically by the effect below whenever a
+  // stream album is opened.
   const handleOpenDriveFolderForViewing = useCallback(
     async (folder: { id: string; name: string }) => {
-      soundService.playPop();
       setViewingDriveFolder(folder);
       setLiveDrivePhotos([]);
       setLiveDriveNextPageToken(undefined);
@@ -600,12 +643,48 @@ export const PhotoAlbumView: React.FC = () => {
     }
   }, [viewingDriveFolder, liveDriveNextPageToken, myProfile.id, myProfile.name]);
 
-  const handleCloseDriveFolderViewer = () => {
-    soundService.playPop();
-    setViewingDriveFolder(null);
-    setLiveDrivePhotos([]);
-    setLiveDriveNextPageToken(undefined);
-  };
+  // Infinite scroll intersection observer: automatically load next batch when scrolling near
+  // bottom. For a stream album, once everything currently fetched has been revealed, keep going
+  // by pulling the next real page (100 more) straight from Drive instead of just stopping.
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries[0].isIntersecting) return;
+        if (visiblePhotoCount < currentViewPhotos.length) {
+          setVisiblePhotoCount((prev) => Math.min(prev + PHOTOS_PAGE_SIZE, currentViewPhotos.length));
+        } else if (currentAlbumObj?.isStreamAlbum && liveDriveNextPageToken && !isLoadingLiveDrivePhotos) {
+          handleLoadMoreLiveDrivePhotos();
+        }
+      },
+      { rootMargin: '600px' }
+    );
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [visiblePhotoCount, currentViewPhotos.length, currentAlbumObj, liveDriveNextPageToken, isLoadingLiveDrivePhotos, handleLoadMoreLiveDrivePhotos]);
+
+  // When a newly-fetched Drive page grows liveDrivePhotos, reveal it immediately instead of
+  // leaving it hidden behind the existing visiblePhotoCount slice.
+  useEffect(() => {
+    if (currentAlbumObj?.isStreamAlbum) {
+      setVisiblePhotoCount((prev) => Math.max(prev, liveDrivePhotos.length));
+    }
+  }, [liveDrivePhotos.length, currentAlbumObj]);
+
+  // Whenever the user opens a stream album (or leaves one), keep the live Drive viewer state in
+  // sync with it — streaming its first page in automatically, exactly like any other album that
+  // "just has photos in it" from the user's point of view.
+  useEffect(() => {
+    if (currentAlbumObj?.isStreamAlbum && currentAlbumObj.driveFolderId) {
+      if (viewingDriveFolder?.id !== currentAlbumObj.driveFolderId) {
+        handleOpenDriveFolderForViewing({ id: currentAlbumObj.driveFolderId, name: currentAlbumObj.name });
+      }
+    } else if (viewingDriveFolder) {
+      setViewingDriveFolder(null);
+      setLiveDrivePhotos([]);
+      setLiveDriveNextPageToken(undefined);
+    }
+  }, [currentAlbumObj, viewingDriveFolder, handleOpenDriveFolderForViewing]);
 
   // Auto scan once on mount if Drive is connected — but only when using the app's own default
   // folder. A custom folder (set via "Đổi Link Thư Mục Drive") is very often a general personal
@@ -640,31 +719,6 @@ export const PhotoAlbumView: React.FC = () => {
     const idx = currentViewPhotos.findIndex((p) => p.id === photo.id);
     setLightboxIndex(idx >= 0 ? idx : 0);
     setLightboxOpen(true);
-  };
-
-  // Lightbox items for the live (view-only) Drive folder browser — same shape as the main
-  // lightbox, built from whatever page of liveDrivePhotos is currently loaded in memory.
-  const liveDriveLightboxItems: LightboxImageItem[] = useMemo(() => {
-    return liveDrivePhotos.map((p) => ({
-      url: p.imageUrl,
-      title: p.title,
-      caption: p.caption,
-      date: formatDateVN(p.date),
-      location: p.location,
-      authorName: p.authorName,
-      originalQuality: true,
-      originalFileId: p.originalFileId,
-      driveViewUrl: p.driveViewUrl,
-      driveDownloadUrl: p.driveDownloadUrl,
-      fileSize: p.fileSize,
-      fileName: p.fileName,
-    }));
-  }, [liveDrivePhotos]);
-
-  const openLiveDriveLightbox = (index: number) => {
-    soundService.playPop();
-    setLiveDriveLightboxIndex(index);
-    setLiveDriveLightboxOpen(true);
   };
 
   // Handle Multi-file upload for Batch with 100% Original Quality
@@ -708,6 +762,16 @@ export const PhotoAlbumView: React.FC = () => {
     e.preventDefault();
     if (batchFilesPreview.length === 0) return;
 
+    // The dropdown above lets the user pick ANY album to upload into — not necessarily the one
+    // they were viewing when they opened this modal — so resolve the real target from its
+    // current value, not from currentAlbumObj. Uploading into a "stream" album (personal Drive
+    // folder) writes the file straight into that EXISTING Drive folder — never a new by-name
+    // subfolder under the app's own root — and the result is shown by adding it to the local
+    // liveDrivePhotos view, never to Firestore.
+    const selectedAlbum = albumsList.find((a) => a.name === uploadAlbumTarget) || currentAlbumObj;
+    const isStreamUpload = !!selectedAlbum?.isStreamAlbum && !!selectedAlbum.driveFolderId;
+    const streamFolderId = selectedAlbum?.driveFolderId;
+    const streamFolderName = selectedAlbum?.name || '';
     const targetAlbum = uploadAlbumTarget.trim() || 'Khoảnh Khắc Hẹn Hò ☕';
     setIsUploadingToDrive(true);
     soundService.playSparkle();
@@ -740,12 +804,20 @@ export const PhotoAlbumView: React.FC = () => {
     for (let i = 0; i < batchFilesPreview.length; i++) {
       const item = batchFilesPreview[i];
       setUploadProgressText(
-        `Đang lưu ảnh ${i + 1}/${batchFilesPreview.length} chất lượng gốc vào Google Drive (Thư mục: Photos/${targetAlbum})...`
+        isStreamUpload
+          ? `Đang lưu ảnh ${i + 1}/${batchFilesPreview.length} vào thư mục Drive "${streamFolderName}"...`
+          : `Đang lưu ảnh ${i + 1}/${batchFilesPreview.length} chất lượng gốc vào Google Drive (Thư mục: Photos/${targetAlbum})...`
       );
 
       let driveData: any = null;
       try {
-        if (item.file) {
+        if (isStreamUpload && streamFolderId) {
+          if (item.file) {
+            driveData = await uploadImageToExistingDriveFolder(token, item.file, item.file.name, streamFolderId, streamFolderName);
+          } else if (item.url) {
+            driveData = await uploadDataUrlImageToExistingDriveFolder(token, item.url, `${item.title}.png`, streamFolderId, streamFolderName);
+          }
+        } else if (item.file) {
           driveData = await uploadOriginalImageToDrive(token, item.file, item.file.name, targetAlbum);
         } else if (item.url) {
           driveData = await uploadDataUrlImageToDrive(token, item.url, `${item.title}.png`, targetAlbum);
@@ -762,6 +834,7 @@ export const PhotoAlbumView: React.FC = () => {
       }
 
       newPhotosPayload.push({
+        id: isStreamUpload ? `drive_photo_${driveData.fileId}` : undefined,
         title: item.title.trim() || `Kỷ niệm ngọt ngào ${i + 1}`,
         caption: batchDefaultCaption.trim(),
         imageUrl: driveData.directUrl,
@@ -769,9 +842,9 @@ export const PhotoAlbumView: React.FC = () => {
         date: batchDefaultDate,
         location: batchDefaultLocation.trim() || undefined,
         frameStyle: batchDefaultFrame,
-        albumId: targetAlbum,
-        albumName: targetAlbum,
-        tags: [targetAlbum],
+        albumId: isStreamUpload ? streamFolderId : targetAlbum,
+        albumName: isStreamUpload ? streamFolderName : targetAlbum,
+        tags: [isStreamUpload ? streamFolderName : targetAlbum],
         originalQuality: true,
         originalFileId: driveData.fileId,
         driveFolderId: driveData.folderId,
@@ -779,11 +852,24 @@ export const PhotoAlbumView: React.FC = () => {
         driveDownloadUrl: driveData.downloadUrl,
         fileSize: item.size,
         fileName: item.file?.name,
+        authorId: myProfile.id,
+        authorName: myProfile.name,
+        likes: [],
+        createdAt: Date.now() + i,
       });
     }
 
     if (newPhotosPayload.length > 0) {
-      addPhotosBatch(newPhotosPayload);
+      if (isStreamUpload) {
+        // Never persisted to Firestore. Only touch the live view if the user is actually looking
+        // at this exact stream album right now — otherwise there's nothing local to update, the
+        // file is already sitting in Drive and will show up next time the album is opened.
+        if (viewingDriveFolder?.id === streamFolderId) {
+          setLiveDrivePhotos((prev) => [...newPhotosPayload, ...prev]);
+        }
+      } else {
+        addPhotosBatch(newPhotosPayload);
+      }
     }
 
     if (failedFileNames.length > 0) {
@@ -791,14 +877,21 @@ export const PhotoAlbumView: React.FC = () => {
       alert(`Không thể tải lên Google Drive: ${failedFileNames.join(', ')}. Các ảnh này chưa được lưu, vui lòng thử lại.`);
     }
 
-    // If album doesn't have cover yet, set first successfully-uploaded photo as cover
+    // If album doesn't have cover yet, set first successfully-uploaded photo as cover — and for a
+    // stream album, bump its approximate count so the overview card stays roughly accurate
+    // without needing a full rescan.
     if (newPhotosPayload[0]?.imageUrl) {
       setAlbumsList((prev) =>
         prev.map((alb) => {
-          if ((alb.id === targetAlbum || alb.name === targetAlbum) && (!alb.coverImage || alb.coverImage.includes('unsplash'))) {
-            return { ...alb, coverImage: newPhotosPayload[0].imageUrl };
-          }
-          return alb;
+          const matchesTarget = isStreamUpload
+            ? alb.isStreamAlbum && alb.driveFolderId === streamFolderId
+            : alb.id === targetAlbum || alb.name === targetAlbum;
+          if (!matchesTarget) return alb;
+          return {
+            ...alb,
+            coverImage: !alb.coverImage || alb.coverImage.includes('unsplash') ? newPhotosPayload[0].imageUrl : alb.coverImage,
+            approxPhotoCount: alb.isStreamAlbum ? (alb.approxPhotoCount || 0) + newPhotosPayload.length : alb.approxPhotoCount,
+          };
         })
       );
     }
@@ -959,7 +1052,9 @@ export const PhotoAlbumView: React.FC = () => {
             <h2 className="font-serif italic text-xl sm:text-2xl text-[#333] dark:text-[#f4effa] flex items-center gap-2">
               <span>{activeAlbumId ? currentAlbumObj?.name || 'Tất Cả Ảnh' : 'Bộ Sưu Tập Tệp Album'}</span>
               <span className="text-xs font-sans not-italic font-bold px-2.5 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-300">
-                {activeAlbumId ? `${currentViewPhotos.length} ảnh` : `${albumsList.length} tệp album`}
+                {activeAlbumId
+                  ? `${currentViewPhotos.length}${currentAlbumObj?.isStreamAlbum && liveDriveNextPageToken ? '+' : ''} ảnh`
+                  : `${albumsList.length} tệp album`}
               </span>
             </h2>
             {activeAlbumId && currentAlbumObj?.description && (
@@ -1074,21 +1169,22 @@ export const PhotoAlbumView: React.FC = () => {
             <>
               {/* Scan & Open Drive Folders — deep multi-album scan for the app's own default
                   folder, or a structure-only scan (folder names + counts, zero photos fetched)
-                  for a custom (often personal/large) folder. Photos in a custom folder are only
-                  ever viewed live, 100 at a time, never imported/stored in the app. */}
+                  for a custom (often personal/large) folder that turns each subfolder into a
+                  real "stream" album — streamed live from Drive, 100 photos at a time, never
+                  imported/stored in Firestore. */}
               {activeCustomFolder ? (
                 <button
                   onClick={handleScanCustomFolderStructure}
                   disabled={isScanningDriveStructure}
                   className="px-3.5 py-2 rounded-2xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
-                  title={`Quét cấu trúc thư mục con trong "${activeCustomFolder.name || ''}" (chỉ xem, không lưu)`}
+                  title={`Quét cấu trúc thư mục con trong "${activeCustomFolder.name || ''}" và thêm thành album`}
                 >
                   <FolderTree className={`w-3.5 h-3.5 ${isScanningDriveStructure ? 'animate-spin' : ''}`} />
                   <span>
                     {isScanningDriveStructure
                       ? 'Đang quét thư mục...'
-                      : driveOnlyFolders.length > 0
-                      ? `Quét Lại (${driveOnlyFolders.length} thư mục)`
+                      : streamAlbumCount > 0
+                      ? `Quét Lại (${streamAlbumCount} album)`
                       : 'Quét Thư Mục Cá Nhân'}
                   </span>
                 </button>
@@ -1147,106 +1243,6 @@ export const PhotoAlbumView: React.FC = () => {
       </div>
 
       {/* ========================================================================= */}
-      {/* 1B. PERSONAL DRIVE FOLDER — VIEW-ONLY BROWSER (zero Firestore storage)   */}
-      {/* ========================================================================= */}
-      {activeCustomFolder && driveOnlyFolders.length > 0 && !viewingDriveFolder && (
-        <div className="mb-6 p-4 sm:p-5 rounded-3xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border border-emerald-100 dark:border-zinc-800 shadow-sm">
-          <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
-            <h3 className="text-sm font-bold text-zinc-800 dark:text-zinc-100 flex items-center gap-1.5">
-              <FolderTree className="w-4 h-4 text-emerald-500" />
-              Thư Mục Con Trong "{activeCustomFolder.name}"
-            </h3>
-            <span className="text-[11px] text-zinc-400 dark:text-zinc-500">
-              Chỉ xem — không lưu vào Firebase
-            </span>
-          </div>
-          {driveStructureTruncated && (
-            <p className="text-xs text-amber-600 dark:text-amber-400 mb-3">
-              ⚠️ Thư mục có rất nhiều thư mục con, chỉ hiện một phần để tránh quá tải.
-            </p>
-          )}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-            {driveOnlyFolders.map((folder) => (
-              <button
-                key={folder.id}
-                onClick={() => handleOpenDriveFolderForViewing({ id: folder.id, name: folder.name })}
-                className="flex flex-col items-start p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border border-zinc-200 dark:border-zinc-700 hover:border-emerald-300 dark:hover:border-emerald-800 transition text-left cursor-pointer"
-              >
-                <Folder className="w-5 h-5 text-emerald-500 mb-2" />
-                <span className="text-xs font-bold text-zinc-800 dark:text-zinc-100 line-clamp-2">
-                  {folder.name}
-                </span>
-                <span className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-1">
-                  {folder.approxPhotoCount}{folder.hasMorePhotosThanCounted ? '+' : ''} ảnh
-                  {folder.subfolders.length > 0 ? ` · ${folder.subfolders.length} thư mục con` : ''}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 1C. PERSONAL DRIVE FOLDER — LIVE PHOTO VIEWER (100 at a time, in-memory)  */}
-      {/* ========================================================================= */}
-      {viewingDriveFolder && (
-        <div className="mb-6 p-4 sm:p-5 rounded-3xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border border-emerald-100 dark:border-zinc-800 shadow-sm">
-          <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
-            <button
-              onClick={handleCloseDriveFolderViewer}
-              className="flex items-center gap-1.5 text-xs font-bold text-zinc-500 hover:text-rose-500 transition cursor-pointer"
-            >
-              ← Quay lại danh sách thư mục
-            </button>
-            <h3 className="text-sm font-bold text-zinc-800 dark:text-zinc-100">
-              {viewingDriveFolder.name} <span className="text-zinc-400 font-normal">({liveDrivePhotos.length} ảnh đã tải)</span>
-            </h3>
-          </div>
-
-          {liveDrivePhotos.length === 0 && isLoadingLiveDrivePhotos ? (
-            <div className="py-16 text-center text-zinc-400 text-sm">Đang tải ảnh...</div>
-          ) : liveDrivePhotos.length === 0 ? (
-            <div className="py-16 text-center text-zinc-400 text-sm">Thư mục này không có ảnh.</div>
-          ) : (
-            <>
-              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2 sm:gap-3">
-                {liveDrivePhotos.map((photo, idx) => (
-                  <div
-                    key={photo.id}
-                    onClick={() => openLiveDriveLightbox(idx)}
-                    className="relative aspect-square rounded-xl overflow-hidden cursor-pointer bg-zinc-100 dark:bg-zinc-800 group"
-                  >
-                    <SmartDriveImage
-                      src={photo.thumbnailUrl || photo.imageUrl}
-                      thumbnailSize={300}
-                      originalFileId={photo.originalFileId}
-                      driveViewUrl={photo.driveViewUrl}
-                      alt={photo.title}
-                      containerClassName="w-full h-full"
-                      className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-                    />
-                  </div>
-                ))}
-              </div>
-
-              {liveDriveNextPageToken && (
-                <div className="flex justify-center mt-5">
-                  <button
-                    onClick={handleLoadMoreLiveDrivePhotos}
-                    disabled={isLoadingLiveDrivePhotos}
-                    className="px-5 py-2.5 rounded-2xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingLiveDrivePhotos ? 'animate-spin' : ''}`} />
-                    <span>{isLoadingLiveDrivePhotos ? 'Đang tải...' : `Xem Thêm ${DRIVE_VIEW_PAGE_SIZE} Ảnh`}</span>
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      {/* ========================================================================= */}
       {/* 2. OVERVIEW MODE: ALBUM FOLDERS LIST (Giao diện từng tệp / Folder Cards) */}
       {/* ========================================================================= */}
       {!activeAlbumId && (
@@ -1291,14 +1287,20 @@ export const PhotoAlbumView: React.FC = () => {
           {/* Grid of Individual Folder / Album Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-7">
             {albumsList.map((album) => {
-              const albumPhotos = photos.filter(
-                (p) =>
-                  p.albumName === album.name ||
-                  p.albumId === album.id ||
-                  p.albumName === album.id ||
-                  (album.driveFolderId && p.driveFolderId === album.driveFolderId)
-              );
-              const totalCount = Math.max(albumPhotos.length, album.photoCount || 0);
+              // Stream albums (personal Drive folder) never have their photos in synced state —
+              // nothing to filter, count comes from the cheap approximate scan instead.
+              const albumPhotos = album.isStreamAlbum
+                ? []
+                : photos.filter(
+                    (p) =>
+                      p.albumName === album.name ||
+                      p.albumId === album.id ||
+                      p.albumName === album.id ||
+                      (album.driveFolderId && p.driveFolderId === album.driveFolderId)
+                  );
+              const totalCount = album.isStreamAlbum
+                ? album.approxPhotoCount || 0
+                : Math.max(albumPhotos.length, (album as any).photoCount || 0);
               const coverImg =
                 albumPhotos[0]?.thumbnailUrl ||
                 albumPhotos[0]?.imageUrl ||
@@ -1323,7 +1325,7 @@ export const PhotoAlbumView: React.FC = () => {
                         style={{ backgroundColor: album.color || '#FF758F' }}
                       />
                       <span className="text-[11px] font-bold tracking-wider uppercase text-zinc-500 dark:text-zinc-400">
-                        {album.isDriveFolder ? 'Thư mục Drive 📁' : 'Tệp Album'}
+                        {album.isStreamAlbum ? 'Xem Trực Tiếp Từ Drive 🔗' : album.isDriveFolder ? 'Thư mục Drive 📁' : 'Tệp Album'}
                       </span>
                     </div>
 
@@ -1373,7 +1375,7 @@ export const PhotoAlbumView: React.FC = () => {
                     {/* Count badge over image */}
                     <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white pointer-events-none">
                       <span className="px-3 py-1 rounded-full bg-black/40 backdrop-blur-md text-xs font-bold border border-white/20">
-                        📷 {totalCount} bức ảnh
+                        📷 {totalCount}{album.isStreamAlbum && album.hasMorePhotosThanCounted ? '+' : ''} bức ảnh
                       </span>
                       {album.subfolders && album.subfolders.length > 0 && (
                         <span className="px-2.5 py-0.5 rounded-full bg-rose-500/80 backdrop-blur-md text-[11px] font-bold">
@@ -1400,10 +1402,17 @@ export const PhotoAlbumView: React.FC = () => {
                     </div>
 
                     <div className="mt-4 pt-3 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between text-xs text-zinc-400">
-                      <span className="flex items-center gap-1 truncate max-w-[160px]" title={`Photos/${album.name}`}>
-                        <Cloud className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        <span className="truncate">Photos/{album.name}</span>
-                      </span>
+                      {album.isStreamAlbum ? (
+                        <span className="flex items-center gap-1 truncate max-w-[160px]" title={album.parentFolderName ? `${album.parentFolderName} / ${album.name}` : album.name}>
+                          <Folder className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                          <span className="truncate">{album.parentFolderName ? `${album.parentFolderName} / ${album.name}` : 'Thư mục cá nhân'}</span>
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1 truncate max-w-[160px]" title={`Photos/${album.name}`}>
+                          <Cloud className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                          <span className="truncate">Photos/{album.name}</span>
+                        </span>
+                      )}
                       <span className="text-rose-500 font-bold text-xs group-hover:underline">
                         Mở Album →
                       </span>
@@ -1615,16 +1624,20 @@ export const PhotoAlbumView: React.FC = () => {
                           <h4 className="font-bold text-sm text-zinc-800 dark:text-zinc-100 truncate font-cute">
                             {photo.title}
                           </h4>
-                          {/* Like button */}
-                          <button
-                            onClick={() => togglePhotoLike(photo.id)}
-                            className={`p-1.5 rounded-full transition flex items-center gap-1 text-xs font-bold ${
-                              isLiked ? 'text-rose-500' : 'text-zinc-400 hover:text-rose-400'
-                            }`}
-                          >
-                            <Heart className={`w-4 h-4 ${isLiked ? 'fill-rose-500' : ''}`} />
-                            <span>{photo.likes.length}</span>
-                          </button>
+                          {/* Like button — not available for stream-album photos: they're never
+                              in synced state, so a like here would be a wasted Firestore write
+                              for a photo id nothing else recognizes. */}
+                          {!currentAlbumObj?.isStreamAlbum && (
+                            <button
+                              onClick={() => togglePhotoLike(photo.id)}
+                              className={`p-1.5 rounded-full transition flex items-center gap-1 text-xs font-bold ${
+                                isLiked ? 'text-rose-500' : 'text-zinc-400 hover:text-rose-400'
+                              }`}
+                            >
+                              <Heart className={`w-4 h-4 ${isLiked ? 'fill-rose-500' : ''}`} />
+                              <span>{photo.likes.length}</span>
+                            </button>
+                          )}
                         </div>
 
                         {photo.caption && (
@@ -1651,9 +1664,17 @@ export const PhotoAlbumView: React.FC = () => {
                               </span>
                             )}
                             <button
-                              onClick={() => deletePhoto(photo.id)}
+                              onClick={() =>
+                                currentAlbumObj?.isStreamAlbum
+                                  ? setLiveDrivePhotos((prev) => prev.filter((p) => p.id !== photo.id))
+                                  : deletePhoto(photo.id)
+                              }
                               className="p-1 text-zinc-300 hover:text-red-500 transition cursor-pointer"
-                              title="Xóa ảnh này"
+                              title={
+                                currentAlbumObj?.isStreamAlbum
+                                  ? 'Ẩn khỏi danh sách này (không xóa file gốc trên Drive)'
+                                  : 'Xóa ảnh này'
+                              }
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -1692,6 +1713,15 @@ export const PhotoAlbumView: React.FC = () => {
                       Hiện tất cả ({currentViewPhotos.length} ảnh)
                     </button>
                   </div>
+                ) : currentAlbumObj?.isStreamAlbum && liveDriveNextPageToken ? (
+                  <button
+                    onClick={handleLoadMoreLiveDrivePhotos}
+                    disabled={isLoadingLiveDrivePhotos}
+                    className="px-5 py-2.5 rounded-2xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingLiveDrivePhotos ? 'animate-spin' : ''}`} />
+                    <span>{isLoadingLiveDrivePhotos ? 'Đang tải...' : `Xem Thêm ${DRIVE_VIEW_PAGE_SIZE} Ảnh Từ Drive`}</span>
+                  </button>
                 ) : currentViewPhotos.length > PHOTOS_PAGE_SIZE ? (
                   <div className="text-center py-4 text-xs font-bold text-zinc-400 flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-rose-400" />
@@ -2303,14 +2333,6 @@ export const PhotoAlbumView: React.FC = () => {
         initialIndex={lightboxIndex}
         isOpen={lightboxOpen}
         onClose={() => setLightboxOpen(false)}
-      />
-
-      {/* Lightbox for the live (view-only) personal Drive folder browser */}
-      <ImageLightbox
-        images={liveDriveLightboxItems}
-        initialIndex={liveDriveLightboxIndex}
-        isOpen={liveDriveLightboxOpen}
-        onClose={() => setLiveDriveLightboxOpen(false)}
       />
     </div>
   );
