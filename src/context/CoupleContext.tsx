@@ -405,20 +405,8 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     })()
   );
 
-  const updateRoomPlaylist = useCallback((newPlaylist: any[], removedId?: string) => {
-    if (removedId) {
-      removedPlaylistIdsRef.current.add(removedId);
-      try {
-        localStorage.setItem(REMOVED_PLAYLIST_IDS_KEY, JSON.stringify(Array.from(removedPlaylistIdsRef.current)));
-      } catch {}
-    }
-    hasUserMutatedRef.current = true;
-    setRoomPlaylist(newPlaylist);
-    try {
-      localStorage.setItem('lovesync_full_playlist_v3', JSON.stringify(newPlaylist));
-    } catch {}
-    broadcastRoomChanges({ playlist: newPlaylist });
-  }, []);
+  // updateRoomPlaylist itself is defined further down, right after broadcastRoomChanges — it has
+  // to close over that function correctly (see the comment there for why this used to be broken).
 
   const isAuthenticated = useMemo(() => {
     const cur = getCurrentAuthUser();
@@ -816,6 +804,40 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch (e) {}
     },
     [settings.roomCode, myUserId, applyIncomingRoomData]
+  );
+
+  // Unlike diaries/photos/cards/anniversaries, the playlist has no per-item merge — it's synced
+  // as one whole array (applyIncomingRoomData's "Sync Playlist" section above), which made a
+  // delete racy: the Firestore write from broadcastRoomChanges is fire-and-forget, so a reload
+  // (or the realtime listener's own next snapshot) landing before that write is actually
+  // acknowledged could read back the pre-delete array and silently resurrect the just-removed
+  // track. Track ids removed here get filtered out of every incoming playlist from then on,
+  // persisted to localStorage so a reload right after deleting can't bring it back either — track
+  // ids are always freshly minted (custom_<timestamp>, yt_<videoId>_<timestamp>) or fixed
+  // built-in ids, never legitimately reused, so this can never end up blocking a real re-add.
+  //
+  // This must be declared with broadcastRoomChanges in its dependency array (not `[]`) — an
+  // earlier version used `[]`, permanently pinning it to whatever broadcastRoomChanges (and the
+  // roomCode/myUserId it closed over) looked like on the very first render. Once the user actually
+  // paired up and roomCode changed to the real shared room, every playlist add/remove kept quietly
+  // broadcasting to the stale old room instead, so the partner never saw any playlist change at
+  // all — the reported "xóa nhạc không đồng bộ vào room" bug.
+  const updateRoomPlaylist = useCallback(
+    (newPlaylist: any[], removedId?: string) => {
+      if (removedId) {
+        removedPlaylistIdsRef.current.add(removedId);
+        try {
+          localStorage.setItem(REMOVED_PLAYLIST_IDS_KEY, JSON.stringify(Array.from(removedPlaylistIdsRef.current)));
+        } catch {}
+      }
+      hasUserMutatedRef.current = true;
+      setRoomPlaylist(newPlaylist);
+      try {
+        localStorage.setItem('lovesync_full_playlist_v3', JSON.stringify(newPlaylist));
+      } catch {}
+      broadcastRoomChanges({ playlist: newPlaylist });
+    },
+    [broadcastRoomChanges]
   );
 
   // REALTIME CLOUD SYNC & REST POLLING (Guarantees Instant Sync on GitHub Pages & Fullstack)
