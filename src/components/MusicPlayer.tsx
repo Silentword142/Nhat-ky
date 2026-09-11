@@ -842,7 +842,14 @@ export const MusicPlayer: React.FC = () => {
                   </div>
                 )}
                 {/* 1. PLAYLIST TAB */}
-                {activeTab === 'playlist' && (
+                {activeTab === 'playlist' && playlist.length === 0 && (
+                  <div className="py-10 text-center text-zinc-400">
+                    <Music className="w-10 h-10 mx-auto mb-2 opacity-50" />
+                    <p className="text-sm font-bold">Danh sách nhạc đang trống</p>
+                    <p className="text-xs mt-1">Tìm bài hát ở tab "Tìm Kiếm YouTube" hoặc chọn gợi ý ở tab "Gợi Ý Cặp Đôi" để thêm nhạc nhé 🎵</p>
+                  </div>
+                )}
+                {activeTab === 'playlist' && playlist.length > 0 && (
                   <div className="space-y-2">
                     {playlist.map((track, idx) => {
                       const isCurrent = currentTrack?.id === track.id;

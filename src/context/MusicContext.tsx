@@ -73,18 +73,12 @@ export const YOUTUBE_MUSIC_HUB: MusicTrack[] = [
 // long-term. The YouTube Music Hub tracks above are the reliable, actively-maintained default
 // catalog — a broken default track was a real, concrete cause of "trình phát nhạc không hoạt
 // động" for anyone whose player happened to land on one of them.
-export const DEFAULT_PLAYLIST: MusicTrack[] = [
-  ...YOUTUBE_MUSIC_HUB,
-  {
-    id: 'track-1',
-    title: 'Giai Điệu Tình Yêu (Romantic Lofi)',
-    artist: 'LoveSync Acoustic',
-    url: 'https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3',
-    coverImage: 'https://images.unsplash.com/photo-1518895949257-7621c3c786d7?w=200&auto=format&fit=crop&q=80',
-    source: 'audio',
-    isCustom: false,
-  },
-];
+// No pre-populated songs — a couple's playlist starts empty and only ever contains what someone
+// explicitly added (from search, a link, an upload, or a "Gợi Ý Cặp Đôi" suggestion). The curated
+// suggestions in YOUTUBE_MUSIC_HUB above are still browsable/playable from the "Gợi Ý Cặp Đôi" tab
+// (playTrack adds a track to the playlist on the fly if it isn't already in it), they just don't
+// show up as a pre-filled queue for everyone by default.
+export const DEFAULT_PLAYLIST: MusicTrack[] = [];
 
 interface MusicContextType {
   playlist: MusicTrack[];
@@ -459,28 +453,37 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [volume, isMuted]);
 
   const playTrack = (track: MusicTrack) => {
-    const idx = playlist.findIndex((t) => t.id === track.id);
-    if (idx !== -1) {
-      if (currentTrack?.id === track.id) {
-        togglePlay();
-        return;
-      }
-      setCurrentTrackIndex(idx);
-      setIsPlaying(true);
-
-      const isYouTube = track.source === 'youtube' || !!track.youtubeId;
-
-      if (!isYouTube && audioRef.current && track.url) {
-        if (currentTrackIdRef.current !== track.id) {
-          audioRef.current.src = track.url;
-          audioRef.current.currentTime = 0;
-        }
-        audioRef.current.volume = isMuted ? 0 : volume;
-        audioRef.current.play().catch(() => {});
-      }
-      // YouTube playback is handled by the currentTrack-changed effect above — it knows whether
-      // the player is ready yet (queuing the load otherwise) so there's no risk of a race here.
+    if (currentTrack?.id === track.id) {
+      togglePlay();
+      return;
     }
+
+    let idx = playlist.findIndex((t) => t.id === track.id);
+    if (idx === -1) {
+      // Playing a track that isn't in the playlist yet (e.g. a "Gợi Ý Cặp Đôi" suggestion, now
+      // that the playlist starts empty by default) — add it first so play/pause/next/prev and
+      // room sync all keep working normally afterward, exactly as if it had been added by hand.
+      const updated = [track, ...playlist];
+      setPlaylist(updated);
+      persistPlaylist(updated);
+      idx = 0;
+    }
+
+    setCurrentTrackIndex(idx);
+    setIsPlaying(true);
+
+    const isYouTube = track.source === 'youtube' || !!track.youtubeId;
+
+    if (!isYouTube && audioRef.current && track.url) {
+      if (currentTrackIdRef.current !== track.id) {
+        audioRef.current.src = track.url;
+        audioRef.current.currentTime = 0;
+      }
+      audioRef.current.volume = isMuted ? 0 : volume;
+      audioRef.current.play().catch(() => {});
+    }
+    // YouTube playback is handled by the currentTrack-changed effect above — it knows whether
+    // the player is ready yet (queuing the load otherwise) so there's no risk of a race here.
   };
 
   const togglePlay = () => {
