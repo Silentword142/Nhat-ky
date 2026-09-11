@@ -116,7 +116,7 @@ export const PhotoAlbumView: React.FC = () => {
   // reached this device's displayed albumsList at all, since it previously only ever read from
   // this device's own localStorage.
   useEffect(() => {
-    if (Array.isArray(roomAlbums) && roomAlbums.length > 0) {
+    if (Array.isArray(roomAlbums)) {
       const currentIds = albumsList.map((a) => a.id).join(',');
       const newIds = roomAlbums.map((a: Album) => a.id).join(',');
       if (currentIds !== newIds) {
@@ -479,26 +479,25 @@ export const PhotoAlbumView: React.FC = () => {
       const scanResult = await scanGoogleDriveFoldersAndPhotos(token, myProfile.id, myProfile.name);
 
       if (scanResult.folders && scanResult.folders.length > 0) {
-        setAlbumsList((prev) => {
-          const updated = [...prev];
-          for (const newAlb of scanResult.folders) {
-            const existingIdx = updated.findIndex(
-              (a) => a.id === newAlb.id || a.name.toLowerCase() === newAlb.name.toLowerCase()
-            );
-            if (existingIdx >= 0) {
-              updated[existingIdx] = {
-                ...updated[existingIdx],
-                ...newAlb,
-                subfolders: newAlb.subfolders || updated[existingIdx].subfolders,
-                driveFolderId: newAlb.driveFolderId || updated[existingIdx].driveFolderId,
-                driveFolderUrl: newAlb.driveFolderUrl || updated[existingIdx].driveFolderUrl,
-              };
-            } else {
-              updated.push(newAlb);
-            }
+        const updatedAlbums = [...albumsList];
+        for (const newAlb of scanResult.folders) {
+          const existingIdx = updatedAlbums.findIndex(
+            (a) => a.id === newAlb.id || a.name.toLowerCase() === newAlb.name.toLowerCase()
+          );
+          if (existingIdx >= 0) {
+            updatedAlbums[existingIdx] = {
+              ...updatedAlbums[existingIdx],
+              ...newAlb,
+              subfolders: newAlb.subfolders || updatedAlbums[existingIdx].subfolders,
+              driveFolderId: newAlb.driveFolderId || updatedAlbums[existingIdx].driveFolderId,
+              driveFolderUrl: newAlb.driveFolderUrl || updatedAlbums[existingIdx].driveFolderUrl,
+            };
+          } else {
+            updatedAlbums.push(newAlb);
           }
-          return updated;
-        });
+        }
+        setAlbumsList(updatedAlbums);
+        updateRoomAlbums(updatedAlbums);
       }
 
       if (scanResult.photos && scanResult.photos.length > 0) {
@@ -532,7 +531,7 @@ export const PhotoAlbumView: React.FC = () => {
     } finally {
       setIsScanningDrive(false);
     }
-  }, [myProfile.id, myProfile.name, photos, addPhotosBatch]);
+  }, [myProfile.id, myProfile.name, photos, addPhotosBatch, albumsList, updateRoomAlbums]);
 
   // Scan the FOLDER STRUCTURE (names/subfolders/approx counts) of the active custom Drive folder
   // — no photos are fetched here — and turn every folder found (top-level + one level of
@@ -581,28 +580,27 @@ export const PhotoAlbumView: React.FC = () => {
       };
       result.folders.forEach((node) => visit(node));
 
-      setAlbumsList((prev) => {
-        const updated = [...prev];
-        for (const alb of flattened) {
-          const idx = updated.findIndex((a) => a.driveFolderId === alb.driveFolderId && a.isStreamAlbum);
-          if (idx >= 0) {
-            // A manually-set cover (via "Sửa Tệp") must stick; only adopt the freshly-scanned
-            // cover when the album doesn't already have a real one of its own.
-            const existingCover = updated[idx].coverImage;
-            const hasRealExistingCover = existingCover && !existingCover.includes('unsplash');
-            updated[idx] = {
-              ...updated[idx],
-              ...alb,
-              id: updated[idx].id,
-              coverImage: hasRealExistingCover ? existingCover : alb.coverImage,
-              color: updated[idx].color || alb.color,
-            };
-          } else {
-            updated.push(alb);
-          }
+      const updatedAlbums = [...albumsList];
+      for (const alb of flattened) {
+        const idx = updatedAlbums.findIndex((a) => a.driveFolderId === alb.driveFolderId && a.isStreamAlbum);
+        if (idx >= 0) {
+          // A manually-set cover (via "Sửa Tệp") must stick; only adopt the freshly-scanned
+          // cover when the album doesn't already have a real one of its own.
+          const existingCover = updatedAlbums[idx].coverImage;
+          const hasRealExistingCover = existingCover && !existingCover.includes('unsplash');
+          updatedAlbums[idx] = {
+            ...updatedAlbums[idx],
+            ...alb,
+            id: updatedAlbums[idx].id,
+            coverImage: hasRealExistingCover ? existingCover : alb.coverImage,
+            color: updatedAlbums[idx].color || alb.color,
+          };
+        } else {
+          updatedAlbums.push(alb);
         }
-        return updated;
-      });
+      }
+      setAlbumsList(updatedAlbums);
+      updateRoomAlbums(updatedAlbums);
 
       soundService.playSparkle();
       setDriveScanFeedback(
@@ -618,7 +616,7 @@ export const PhotoAlbumView: React.FC = () => {
     } finally {
       setIsScanningDriveStructure(false);
     }
-  }, [activeCustomFolder]);
+  }, [activeCustomFolder, albumsList, updateRoomAlbums]);
 
   // Open a specific Drive folder for LIVE viewing (first page of photos). Nothing here is ever
   // written to addPhotosBatch/Firestore — it's held only in this component's own state, gone the

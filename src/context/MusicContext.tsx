@@ -209,7 +209,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Sync incoming playlist from couple room / Google Drive restore
   useEffect(() => {
-    if (coupleContext?.roomPlaylist && Array.isArray(coupleContext.roomPlaylist) && coupleContext.roomPlaylist.length > 0) {
+    if (coupleContext?.roomPlaylist && Array.isArray(coupleContext.roomPlaylist)) {
       const currentIds = playlist.map((t) => t.id).join(',');
       const newIds = coupleContext.roomPlaylist.map((t) => t.id).join(',');
       if (currentIds !== newIds) {

@@ -716,7 +716,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // landed yet, or a snapshot arrived out of order) can't resurrect a track just deleted.
       // Expired entries are pruned first — see removedPlaylistIdsRef's declaration for why this
       // must never be a permanent blacklist.
-      if (Array.isArray(data.playlist) && data.playlist.length > 0) {
+      if (Array.isArray(data.playlist)) {
         pruneAndPersistRemovedPlaylistIds();
         const incomingPlaylist = removedPlaylistIdsRef.current.size > 0
           ? data.playlist.filter((t: any) => !t?.id || !removedPlaylistIdsRef.current.has(t.id))
@@ -729,8 +729,11 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       // 4c. Sync Albums — same tombstone-filtered whole-array sync as playlist above. This used
       // to only ever write to localStorage with no reactive state for PhotoAlbumView to read, so
-      // an incoming update from the room never actually reached the UI at all.
-      if (Array.isArray(data.albums) && data.albums.length > 0) {
+      // an incoming update from the room never actually reached the UI at all. Deliberately no
+      // "> 0" length guard here: a legitimate delete-down-to-zero (or a fresh scan on one device)
+      // must still reach the other device instead of getting silently stuck — the tombstone map
+      // above is what actually protects against a stale/racy read resurrecting a just-deleted item.
+      if (Array.isArray(data.albums)) {
         pruneAndPersistRemovedAlbumIds();
         const incomingAlbums = removedAlbumIdsRef.current.size > 0
           ? data.albums.filter((a: any) => !a?.id || !removedAlbumIdsRef.current.has(a.id))
