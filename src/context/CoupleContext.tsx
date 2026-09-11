@@ -1424,6 +1424,10 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     soundService.playPop();
     const authUser = getCurrentAuthUser();
     const cleanUser = authUser?.username || '';
+    // Capture before clearing partnerAccountInfo below — needed to clean up their account record
+    // too (see unlinkPartnerAccountService: unlinking used to only touch this user's own account,
+    // leaving the partner's still pointing back at them as if nothing had changed).
+    const partnerUsernameToClear = partnerAccountInfo?.username;
 
     // 1. Immediately clear all partner state from UI and storage
     setPartnerProfileState(null);
@@ -1436,7 +1440,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setIncomingHeartbeat(null);
 
     // 2. Call backend service to separate accounts into distinct rooms and remove profiles
-    const result = await unlinkPartnerAccountService(myUserId, settings.roomCode);
+    const result = await unlinkPartnerAccountService(myUserId, settings.roomCode, partnerUsernameToClear);
     const newRoom = result.newRoomCode || (cleanUser ? `ROOM-${cleanUser.toUpperCase()}` : `LOVE-${Math.random().toString(36).substring(2, 7).toUpperCase()}`);
 
     // 3. Update local settings to new private room
@@ -1447,7 +1451,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch {}
       return nextSettings;
     });
-  }, [settings.roomCode, myUserId]);
+  }, [settings.roomCode, myUserId, partnerAccountInfo]);
 
   // Update profile
   const updateMyProfile = useCallback(

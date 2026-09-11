@@ -588,7 +588,8 @@ export async function linkPartnerAccountService(partnerUsername: string): Promis
 // 7. Unlink Partner Account (Separates accounts into separate rooms)
 export async function unlinkPartnerAccountService(
   userId?: string,
-  currentRoomCode?: string
+  currentRoomCode?: string,
+  partnerUsername?: string
 ): Promise<{ success: boolean; newRoomCode: string }> {
   const current = getCurrentAuthUser();
   const cleanUsername = current?.username || '';
@@ -617,6 +618,21 @@ export async function unlinkPartnerAccountService(
 
     try {
       setDoc(doc(db, 'users', cleanUsername), { partnerUsername: null, partnerDisplayName: null, roomCode: fallbackRoom, updatedAt: Date.now() }, { merge: true }).catch(() => {});
+    } catch {}
+  }
+
+  // Unlinking previously only cleaned up THIS user's own account record — the partner's account
+  // still pointed at this user as their partner, so from their side nothing looked unlinked at
+  // all. Only clear their partner pointer, never their own roomCode — forcibly relocating them to
+  // a different room without their knowledge would be a worse surprise than this was.
+  const cleanPartnerUsername = partnerUsername?.trim().toLowerCase();
+  if (cleanPartnerUsername) {
+    try {
+      setDoc(
+        doc(db, 'users', cleanPartnerUsername),
+        { partnerUsername: null, partnerDisplayName: null, updatedAt: Date.now() },
+        { merge: true }
+      ).catch(() => {});
     } catch {}
   }
 

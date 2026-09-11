@@ -195,7 +195,8 @@ export const SettingsView: React.FC = () => {
       clearCustomPhotosFolder();
       setActivePhotosFolder(null);
       setCustomFolderErrorNotice(null);
-      setCustomFolderSaveNotice('✓ Đã đặt lại về thư mục Album Ảnh mặc định của LoveSync!');
+      updateSettings({ customPhotosFolderId: '', customPhotosFolderName: '', customPhotosFolderUrl: '' });
+      setCustomFolderSaveNotice('✓ Đã đặt lại về thư mục Album Ảnh mặc định của LoveSync! Áp dụng cho cả hai tài khoản.');
       soundService.playSparkle();
       setTimeout(() => setCustomFolderSaveNotice(null), 4000);
       return;
@@ -231,8 +232,15 @@ export const SettingsView: React.FC = () => {
       const finalName = customPhotosFolderName.trim() || details.name;
       const saved = setCustomPhotosFolder(details.id, finalName);
       setActivePhotosFolder(saved);
+      if (saved) {
+        updateSettings({
+          customPhotosFolderId: saved.id,
+          customPhotosFolderName: finalName,
+          customPhotosFolderUrl: saved.url,
+        });
+      }
       soundService.playSparkle();
-      setCustomFolderSaveNotice(`✓ Đã đổi đường dẫn lưu ảnh sang thư mục "${finalName}"!`);
+      setCustomFolderSaveNotice(`✓ Đã đổi đường dẫn lưu ảnh sang thư mục "${finalName}"! Áp dụng cho cả hai tài khoản.`);
       setTimeout(() => setCustomFolderSaveNotice(null), 4000);
     } catch (err: any) {
       setCustomFolderErrorNotice(err.message || 'Lỗi kiểm tra thư mục Google Drive.');
@@ -247,7 +255,8 @@ export const SettingsView: React.FC = () => {
     setCustomPhotosFolderInput('');
     setCustomPhotosFolderName('');
     setCustomFolderErrorNotice(null);
-    setCustomFolderSaveNotice('✓ Đã khôi phục về thư mục Album Ảnh mặc định của LoveSync!');
+    updateSettings({ customPhotosFolderId: '', customPhotosFolderName: '', customPhotosFolderUrl: '' });
+    setCustomFolderSaveNotice('✓ Đã khôi phục về thư mục Album Ảnh mặc định của LoveSync! Áp dụng cho cả hai tài khoản.');
     soundService.playPop();
     setTimeout(() => setCustomFolderSaveNotice(null), 4000);
   };

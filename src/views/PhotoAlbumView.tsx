@@ -124,6 +124,7 @@ export const PhotoAlbumView: React.FC = () => {
     connectGoogleDrive,
     roomAlbums,
     updateRoomAlbums,
+    updateSettings,
   } = useCouple();
   const currentTheme = THEMES[settings.theme] || THEMES.sakura;
 
@@ -236,6 +237,42 @@ export const PhotoAlbumView: React.FC = () => {
   const [customFolderVerifyError, setCustomFolderVerifyError] = useState<string | null>(null);
   const [activeCustomFolder, setActiveCustomFolder] = useState(() => getCustomPhotosFolder());
 
+  // Pick up the shared custom Drive folder setting from the room — previously this was 100%
+  // per-device (localStorage only via getCustomPhotosFolder/setCustomPhotosFolder), so when one
+  // partner changed it, the other never saw the change at all. settings.customPhotosFolderId is
+  // now the actual shared source of truth; this mirrors an incoming change into the local
+  // googleDrive-service storage those helper functions read from everywhere else in this file.
+  //
+  // Three distinct states matter here, not two: a real id (adopt it), an explicit empty string
+  // (both partners deliberately cleared it — see handleResetToDefaultFolder, follow suit), and
+  // undefined (an older room that has simply never had this field at all). That last case must
+  // NOT be treated as "cleared" — a user who already had a local custom folder saved before this
+  // sync existed would otherwise have it silently wiped the first time this effect ran. Push the
+  // existing local folder up as the shared one instead.
+  useEffect(() => {
+    const roomFolderId = settings.customPhotosFolderId;
+    if (roomFolderId) {
+      if (activeCustomFolder?.id !== roomFolderId) {
+        const saved = setCustomPhotosFolder(
+          settings.customPhotosFolderUrl || roomFolderId,
+          settings.customPhotosFolderName
+        );
+        setActiveCustomFolder(saved);
+      }
+    } else if (roomFolderId === '') {
+      if (activeCustomFolder) {
+        clearCustomPhotosFolder();
+        setActiveCustomFolder(null);
+      }
+    } else if (roomFolderId === undefined && activeCustomFolder) {
+      updateSettings({
+        customPhotosFolderId: activeCustomFolder.id,
+        customPhotosFolderName: activeCustomFolder.name,
+        customPhotosFolderUrl: activeCustomFolder.url,
+      });
+    }
+  }, [settings.customPhotosFolderId, settings.customPhotosFolderName, settings.customPhotosFolderUrl]);
+
   // Open Custom Drive Folder Modal
   const openDriveFolderModal = () => {
     soundService.playPop();
@@ -253,18 +290,18 @@ export const PhotoAlbumView: React.FC = () => {
     if (e) e.preventDefault();
     const input = customFolderInput.trim();
     if (!input) {
-      // Revert to default
+      // Revert to default — the empty string (not omitting the field) is what marks this as a
+      // deliberate clear for the receiving effect above, distinct from "never set".
       clearCustomPhotosFolder();
       setActiveCustomFolder(null);
       setCustomFolderVerifyResult(null);
       setCustomFolderVerifyError(null);
-      setDriveOnlyFolders([]);
-      setDriveStructureTruncated(false);
       setViewingDriveFolder(null);
       setLiveDrivePhotos([]);
       setLiveDriveNextPageToken(undefined);
+      updateSettings({ customPhotosFolderId: '', customPhotosFolderName: '', customPhotosFolderUrl: '' });
       soundService.playSparkle();
-      setDriveScanFeedback('✓ Đã khôi phục về thư mục ảnh mặc định của LoveSync!');
+      setDriveScanFeedback('✓ Đã khôi phục về thư mục ảnh mặc định của LoveSync! Thay đổi này áp dụng cho cả hai tài khoản.');
       setIsDriveFolderModalOpen(false);
       handleScanDriveFolders(false);
       return;
@@ -303,11 +340,19 @@ export const PhotoAlbumView: React.FC = () => {
       setCustomFolderVerifyResult(saved ? { id: saved.id, name: finalName, url: saved.url } : null);
       // Reset structure/live-view state — anything from whichever folder was active before is
       // meaningless here
-      setDriveOnlyFolders([]);
-      setDriveStructureTruncated(false);
       setViewingDriveFolder(null);
       setLiveDrivePhotos([]);
       setLiveDriveNextPageToken(undefined);
+      // Share this folder choice through the room so the partner's device picks it up too —
+      // previously this was 100% per-device, so each person could silently end up pointed at a
+      // different Drive folder for the "same" album.
+      if (saved) {
+        updateSettings({
+          customPhotosFolderId: saved.id,
+          customPhotosFolderName: finalName,
+          customPhotosFolderUrl: saved.url,
+        });
+      }
       soundService.playSparkle();
       // Deliberately NOT auto-loading here. A custom folder is very often a general personal
       // Drive folder (camera roll backups etc.), not a small folder made just for this app — an
@@ -316,7 +361,7 @@ export const PhotoAlbumView: React.FC = () => {
       // points there); browsing existing photos is a separate, explicit, view-only action — the
       // user scans the folder structure, then opens a sub-album to view 100 photos at a time.
       // Nothing seen this way is ever imported into the app or written to Firestore.
-      setDriveScanFeedback(`✓ Đã lưu đường dẫn thư mục "${finalName}"! Ảnh mới tải lên sẽ vào đây. Bấm "Quét Thư Mục Cá Nhân" nếu muốn xem ảnh có sẵn trong thư mục này.`);
+      setDriveScanFeedback(`✓ Đã lưu đường dẫn thư mục "${finalName}"! Áp dụng cho cả hai tài khoản. Ảnh mới tải lên sẽ vào đây. Bấm "Quét Thư Mục Cá Nhân" nếu muốn xem ảnh có sẵn trong thư mục này.`);
       setTimeout(() => {
         setIsDriveFolderModalOpen(false);
         setDriveScanFeedback(null);
@@ -336,13 +381,12 @@ export const PhotoAlbumView: React.FC = () => {
     setCustomFolderNameInput('');
     setCustomFolderVerifyResult(null);
     setCustomFolderVerifyError(null);
-    setDriveOnlyFolders([]);
-    setDriveStructureTruncated(false);
     setViewingDriveFolder(null);
     setLiveDrivePhotos([]);
     setLiveDriveNextPageToken(undefined);
+    updateSettings({ customPhotosFolderId: '', customPhotosFolderName: '', customPhotosFolderUrl: '' });
     soundService.playSparkle();
-    setDriveScanFeedback('✓ Đã khôi phục về thư mục ảnh mặc định của LoveSync!');
+    setDriveScanFeedback('✓ Đã khôi phục về thư mục ảnh mặc định của LoveSync! Thay đổi này áp dụng cho cả hai tài khoản.');
     setIsDriveFolderModalOpen(false);
     handleScanDriveFolders(false);
   };

@@ -82,6 +82,11 @@ export interface CoupleSettings {
   accountEmail?: string;
   cycleSettings?: CycleSettings;
   cycleLogs?: Record<string, DailyCycleLog>; // dateStr -> DailyCycleLog
+  // Which Google Drive folder the Photo Album uploads/browses — synced through the room so both
+  // partners always point at the same folder instead of each device picking its own independently.
+  customPhotosFolderId?: string;
+  customPhotosFolderName?: string;
+  customPhotosFolderUrl?: string;
 }
 
 export interface DiaryComment {
