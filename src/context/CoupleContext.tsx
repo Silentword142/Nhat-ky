@@ -388,22 +388,51 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // write from broadcastRoomChanges is fire-and-forget, so a reload (or the realtime listener's
   // own next snapshot) landing before that write is actually acknowledged could read back the
   // pre-delete array and silently resurrect the just-removed track. Track ids removed here get
-  // filtered out of every incoming playlist from then on, persisted to localStorage so a reload
-  // right after deleting can't bring it back either — track ids are always freshly minted
-  // (custom_<timestamp>, yt_<videoId>_<timestamp>) or fixed built-in ids, never legitimately
-  // reused, so this can never end up blocking a real re-add.
+  // filtered out of every incoming playlist for a short window afterward, persisted to localStorage
+  // (as id -> removedAt) so a reload right after deleting can't bring it back either.
+  //
+  // This MUST expire (originally didn't — a real, since-fixed bug): dynamically-minted ids
+  // (custom_<timestamp>, yt_<videoId>_<timestamp>) are never reused, but the built-in catalog
+  // tracks (yt-1..yt-5, track-1) use fixed ids, and DEFAULT_PLAYLIST legitimately reintroduces
+  // them (e.g. after a fresh/cleared session). A permanent tombstone silently blocked every one
+  // of those ids the instant a user had ever deleted it at all, even in some earlier session —
+  // after enough delete/reset cycles all 6 built-in ids ended up tombstoned forever, so every
+  // real (non-empty) incoming Firestore playlist got filtered down to nothing. A short TTL still
+  // covers the write race this exists for, without permanently blacklisting an id.
   const REMOVED_PLAYLIST_IDS_KEY = 'lovesync_removed_playlist_ids';
-  const removedPlaylistIdsRef = useRef<Set<string>>(
+  const REMOVED_PLAYLIST_ID_TTL_MS = 2 * 60 * 1000;
+  const removedPlaylistIdsRef = useRef<Map<string, number>>(
     (() => {
       try {
         const saved = localStorage.getItem(REMOVED_PLAYLIST_IDS_KEY);
         const parsed = saved ? JSON.parse(saved) : [];
-        return new Set(Array.isArray(parsed) ? parsed : []);
+        const now = Date.now();
+        const entries: [string, number][] = Array.isArray(parsed)
+          ? parsed.filter(
+              (e: any): e is [string, number] =>
+                Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'number' && now - e[1] < REMOVED_PLAYLIST_ID_TTL_MS
+            )
+          : [];
+        return new Map(entries);
       } catch {
-        return new Set<string>();
+        return new Map<string, number>();
       }
     })()
   );
+
+  // Drop any expired entries and persist whatever's left — called after every add/check so the
+  // stored set never grows unbounded and a stale entry can't outlive its TTL across reloads.
+  const pruneAndPersistRemovedPlaylistIds = () => {
+    const now = Date.now();
+    for (const [id, removedAt] of removedPlaylistIdsRef.current) {
+      if (now - removedAt >= REMOVED_PLAYLIST_ID_TTL_MS) {
+        removedPlaylistIdsRef.current.delete(id);
+      }
+    }
+    try {
+      localStorage.setItem(REMOVED_PLAYLIST_IDS_KEY, JSON.stringify(Array.from(removedPlaylistIdsRef.current.entries())));
+    } catch {}
+  };
 
   // updateRoomPlaylist itself is defined further down, right after broadcastRoomChanges — it has
   // to close over that function correctly (see the comment there for why this used to be broken).
@@ -652,10 +681,13 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         });
       }
 
-      // 4b. Sync Playlist — filter out anything removed locally this session so a stale/racy
-      // read (the delete's own Firestore write hadn't landed yet, or a snapshot arrived out of
-      // order) can never resurrect a track the user just deleted.
+      // 4b. Sync Playlist — filter out anything removed here within the last
+      // REMOVED_PLAYLIST_ID_TTL_MS so a stale/racy read (the delete's own Firestore write hadn't
+      // landed yet, or a snapshot arrived out of order) can't resurrect a track just deleted.
+      // Expired entries are pruned first — see removedPlaylistIdsRef's declaration for why this
+      // must never be a permanent blacklist.
       if (Array.isArray(data.playlist) && data.playlist.length > 0) {
+        pruneAndPersistRemovedPlaylistIds();
         const incomingPlaylist = removedPlaylistIdsRef.current.size > 0
           ? data.playlist.filter((t: any) => !t?.id || !removedPlaylistIdsRef.current.has(t.id))
           : data.playlist;
@@ -806,15 +838,10 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     [settings.roomCode, myUserId, applyIncomingRoomData]
   );
 
-  // Unlike diaries/photos/cards/anniversaries, the playlist has no per-item merge — it's synced
-  // as one whole array (applyIncomingRoomData's "Sync Playlist" section above), which made a
-  // delete racy: the Firestore write from broadcastRoomChanges is fire-and-forget, so a reload
-  // (or the realtime listener's own next snapshot) landing before that write is actually
-  // acknowledged could read back the pre-delete array and silently resurrect the just-removed
-  // track. Track ids removed here get filtered out of every incoming playlist from then on,
-  // persisted to localStorage so a reload right after deleting can't bring it back either — track
-  // ids are always freshly minted (custom_<timestamp>, yt_<videoId>_<timestamp>) or fixed
-  // built-in ids, never legitimately reused, so this can never end up blocking a real re-add.
+  // Deletes are tracked in removedPlaylistIdsRef for a short TTL only — see that ref's own
+  // declaration for the full reasoning (an earlier permanent-tombstone version ended up
+  // blacklisting every built-in track id after enough delete/reset cycles, since those use fixed
+  // ids that DEFAULT_PLAYLIST can legitimately reintroduce).
   //
   // This must be declared with broadcastRoomChanges in its dependency array (not `[]`) — an
   // earlier version used `[]`, permanently pinning it to whatever broadcastRoomChanges (and the
@@ -825,10 +852,8 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const updateRoomPlaylist = useCallback(
     (newPlaylist: any[], removedId?: string) => {
       if (removedId) {
-        removedPlaylistIdsRef.current.add(removedId);
-        try {
-          localStorage.setItem(REMOVED_PLAYLIST_IDS_KEY, JSON.stringify(Array.from(removedPlaylistIdsRef.current)));
-        } catch {}
+        removedPlaylistIdsRef.current.set(removedId, Date.now());
+        pruneAndPersistRemovedPlaylistIds();
       }
       hasUserMutatedRef.current = true;
       setRoomPlaylist(newPlaylist);

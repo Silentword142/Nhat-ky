@@ -200,8 +200,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // The couple's shared playlist lives in the room document (see coupleContext.roomPlaylist /
   // updateRoomPlaylist) — adding or removing a track here updates it for both accounts.
-  // `removedId` (only passed by removeTrack) lets the room-level sync permanently ignore that id
-  // from then on, so a delete can never get raced back to life by a stale/late-arriving snapshot.
+  // `removedId` (only passed by removeTrack) lets the room-level sync ignore that id for a short
+  // while, so a delete can't get raced back to life by a stale/late-arriving snapshot.
   const persistPlaylist = (updatedPlaylist: MusicTrack[], removedId?: string) => {
     try {
       localStorage.setItem(STORAGE_KEY_PLAYLIST, JSON.stringify(updatedPlaylist));
