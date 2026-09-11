@@ -73,40 +73,7 @@ const FRAME_STYLES = [
   { id: 'classic', label: 'Tối Giản Hiện Đại', emoji: '✨' },
 ];
 
-const DEFAULT_ALBUMS: Album[] = [
-  {
-    id: 'hen_ho',
-    name: 'Khoảnh Khắc Hẹn Hò ☕',
-    description: 'Những buổi cafe, xem phim và dạo phố cùng nhau',
-    coverImage: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=600&auto=format&fit=crop&q=80',
-    color: '#FF758F',
-    createdAt: Date.now() - 86400000 * 30,
-  },
-  {
-    id: 'du_lich',
-    name: 'Chuyến Đi Của Đôi Ta ✈️',
-    description: 'Cùng nhau đi khắp muôn nơi và lưu giữ cảnh đẹp',
-    coverImage: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=600&auto=format&fit=crop&q=80',
-    color: '#70A6FF',
-    createdAt: Date.now() - 86400000 * 20,
-  },
-  {
-    id: 'dang_yeu',
-    name: 'Ảnh Đáng Yêu Của Em 🌸',
-    description: 'Những khoảnh khắc em cười tươi nhất trên đời',
-    coverImage: 'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=600&auto=format&fit=crop&q=80',
-    color: '#FF9A9E',
-    createdAt: Date.now() - 86400000 * 15,
-  },
-  {
-    id: 'ky_niem',
-    name: 'Kỷ Niệm Ngày Yêu 💕',
-    description: 'Những cột mốc và ngày đặc biệt không thể nào quên',
-    coverImage: 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=600&auto=format&fit=crop&q=80',
-    color: '#F472B6',
-    createdAt: Date.now() - 86400000 * 10,
-  },
-];
+const DEFAULT_ALBUMS: Album[] = [];
 
 const STORAGE_ALBUMS_KEY = 'lovesync_custom_albums_v2';
 
