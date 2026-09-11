@@ -367,23 +367,39 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, []);
 
-  // Poll playback position for the current YouTube track — the IFrame API doesn't push time
-  // updates on its own the way the native <audio> element's `timeupdate` event does.
+  // Poll playback position AND reconcile isPlaying against the YouTube player's real state — the
+  // IFrame API doesn't push time updates on its own the way the native <audio> element's
+  // `timeupdate` event does, and onStateChange alone isn't fully reliable: browser autoplay
+  // policies, a stale queued play/pause call landing after a track switch, or a state-change
+  // event that fires before the React callback is wired up can all leave isPlaying (and the
+  // play/pause icon) out of sync with whether the video is actually playing. This poll — running
+  // continuously whenever a YouTube track is current, not just while isPlaying is already true —
+  // self-corrects that within a second either direction, so the icon never stays wrong for long.
   useEffect(() => {
     const isYouTube = currentTrack?.source === 'youtube' || !!currentTrack?.youtubeId;
-    if (!isYouTube || !isPlaying) return;
+    if (!isYouTube) return;
     const interval = setInterval(() => {
       const p = ytPlayerRef.current;
-      if (!p || typeof p.getCurrentTime !== 'function') return;
+      if (!p) return;
       try {
-        const cur = p.getCurrentTime();
-        const dur = p.getDuration();
-        if (typeof cur === 'number' && !isNaN(cur)) setProgress(cur);
-        if (typeof dur === 'number' && dur > 0) setDuration(dur);
+        if (typeof p.getCurrentTime === 'function') {
+          const cur = p.getCurrentTime();
+          const dur = p.getDuration();
+          if (typeof cur === 'number' && !isNaN(cur)) setProgress(cur);
+          if (typeof dur === 'number' && dur > 0) setDuration(dur);
+        }
+        if (typeof p.getPlayerState === 'function') {
+          const state = p.getPlayerState();
+          // YT.PlayerState: -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued
+          if (state === 1 || state === 2 || state === 3) {
+            const actuallyPlaying = state === 1 || state === 3;
+            setIsPlaying((prev) => (prev !== actuallyPlaying ? actuallyPlaying : prev));
+          }
+        }
       } catch {}
-    }, 500);
+    }, 800);
     return () => clearInterval(interval);
-  }, [currentTrack?.id, isPlaying]);
+  }, [currentTrack?.id]);
 
   useEffect(() => {
     if (!currentTrack) return;

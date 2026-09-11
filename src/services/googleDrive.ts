@@ -290,9 +290,35 @@ export async function findOrCreateAlbumFolder(
 }
 
 /**
- * In-memory cache for resolved authenticated image blob URLs
+ * In-memory cache for resolved authenticated image blob URLs. This is a fallback path only (see
+ * SmartDriveImage — it's used when a direct thumbnail URL fails to load, e.g. Drive rate-limiting
+ * a burst of simultaneous thumbnail requests when a big album/stream folder renders many images
+ * at once), but a large album can still trigger it for dozens/hundreds of images. Each entry
+ * holds a full-size blob alive in memory via its object URL, which is never freed by the browser
+ * on its own — an unbounded cache here was a real, concrete way for browsing a heavy album to
+ * exhaust memory and crash the tab to a blank white page. Capped with LRU eviction, revoking the
+ * evicted entry's object URL so the browser can actually reclaim that memory.
  */
+const DRIVE_BLOB_CACHE_MAX_ENTRIES = 150;
 export const driveBlobCache = new Map<string, string>();
+
+function setDriveBlobCache(fileId: string, objectUrl: string) {
+  if (driveBlobCache.has(fileId)) {
+    driveBlobCache.delete(fileId); // re-inserted below, moving it to the "most recently used" end
+  } else if (driveBlobCache.size >= DRIVE_BLOB_CACHE_MAX_ENTRIES) {
+    const oldestKey = driveBlobCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      const oldestUrl = driveBlobCache.get(oldestKey);
+      driveBlobCache.delete(oldestKey);
+      if (oldestUrl) {
+        try {
+          URL.revokeObjectURL(oldestUrl);
+        } catch {}
+      }
+    }
+  }
+  driveBlobCache.set(fileId, objectUrl);
+}
 
 /**
  * Fetch and return an authenticated blob URL for a Google Drive file ID
@@ -317,7 +343,7 @@ export async function getAuthenticatedDriveImageUrl(
 
     const blob = await res.blob();
     const objectUrl = URL.createObjectURL(blob);
-    driveBlobCache.set(fileId, objectUrl);
+    setDriveBlobCache(fileId, objectUrl);
     return objectUrl;
   } catch (err) {
     console.warn(`Failed to fetch authenticated Drive blob for ${fileId}:`, err);
@@ -419,7 +445,7 @@ async function uploadBytesToDriveFolder(
     // Cache the original blob in memory for instant high-speed rendering
     try {
       const localBlobUrl = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
-      driveBlobCache.set(fileId, localBlobUrl);
+      setDriveBlobCache(fileId, localBlobUrl);
     } catch {}
 
     // Direct high-quality view links:
