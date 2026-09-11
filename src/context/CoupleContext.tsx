@@ -112,6 +112,8 @@ export interface CoupleContextType {
   sendTypingStatus: (isTyping: boolean) => void;
   roomPlaylist: any[];
   updateRoomPlaylist: (newPlaylist: any[], removedId?: string) => void;
+  roomAlbums: any[];
+  updateRoomAlbums: (newAlbums: any[], removedId?: string) => void;
   exportData: () => string;
   importData: (jsonStr: string) => boolean;
 }
@@ -212,6 +214,43 @@ export function mergeWithAuthoritativeRemote<T extends { id?: string }>(
   }
 
   return Array.from(map.values());
+}
+
+/**
+ * Shared tombstone helper for the whole-array-overwrite sync paths (playlist, albums — anything
+ * that has no per-item merge, unlike diaries/photos/cards/anniversaries). A delete's Firestore
+ * write is fire-and-forget, so a reload or the realtime listener's own next snapshot landing
+ * before that write is acknowledged could read back the pre-delete array and resurrect the
+ * just-removed item. Ids removed here are filtered out of incoming data for `ttlMs` — NOT
+ * forever: ids can be fixed/reused (a default catalog reintroducing a built-in id after a
+ * cleared session, for instance), so a permanent blacklist eventually blocks a legitimate
+ * reappearance. See the music playlist bug this was extracted from for the full story.
+ */
+function loadTombstoneMap(storageKey: string, ttlMs: number): Map<string, number> {
+  try {
+    const saved = localStorage.getItem(storageKey);
+    const parsed = saved ? JSON.parse(saved) : [];
+    const now = Date.now();
+    const entries: [string, number][] = Array.isArray(parsed)
+      ? parsed.filter(
+          (e: any): e is [string, number] =>
+            Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'number' && now - e[1] < ttlMs
+        )
+      : [];
+    return new Map(entries);
+  } catch {
+    return new Map<string, number>();
+  }
+}
+
+function pruneAndPersistTombstoneMap(map: Map<string, number>, storageKey: string, ttlMs: number) {
+  const now = Date.now();
+  for (const [id, removedAt] of map) {
+    if (now - removedAt >= ttlMs) map.delete(id);
+  }
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(Array.from(map.entries())));
+  } catch {}
 }
 
 // Unique Device Identity per browser
@@ -384,58 +423,34 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   });
 
   // Unlike diaries/photos/cards/anniversaries, the playlist has no per-item merge — it's synced
-  // as one whole array (see applyIncomingRoomData below), which made a delete racy: the Firestore
-  // write from broadcastRoomChanges is fire-and-forget, so a reload (or the realtime listener's
-  // own next snapshot) landing before that write is actually acknowledged could read back the
-  // pre-delete array and silently resurrect the just-removed track. Track ids removed here get
-  // filtered out of every incoming playlist for a short window afterward, persisted to localStorage
-  // (as id -> removedAt) so a reload right after deleting can't bring it back either.
-  //
-  // This MUST expire (originally didn't — a real, since-fixed bug): dynamically-minted ids
-  // (custom_<timestamp>, yt_<videoId>_<timestamp>) are never reused, but the built-in catalog
-  // tracks (yt-1..yt-5, track-1) use fixed ids, and DEFAULT_PLAYLIST legitimately reintroduces
-  // them (e.g. after a fresh/cleared session). A permanent tombstone silently blocked every one
-  // of those ids the instant a user had ever deleted it at all, even in some earlier session —
-  // after enough delete/reset cycles all 6 built-in ids ended up tombstoned forever, so every
-  // real (non-empty) incoming Firestore playlist got filtered down to nothing. A short TTL still
-  // covers the write race this exists for, without permanently blacklisting an id.
+  // as one whole array (see applyIncomingRoomData below). See loadTombstoneMap's comment above
+  // for why this needs a short-TTL tombstone rather than either nothing or a permanent one.
+  const TOMBSTONE_TTL_MS = 2 * 60 * 1000;
   const REMOVED_PLAYLIST_IDS_KEY = 'lovesync_removed_playlist_ids';
-  const REMOVED_PLAYLIST_ID_TTL_MS = 2 * 60 * 1000;
-  const removedPlaylistIdsRef = useRef<Map<string, number>>(
-    (() => {
-      try {
-        const saved = localStorage.getItem(REMOVED_PLAYLIST_IDS_KEY);
-        const parsed = saved ? JSON.parse(saved) : [];
-        const now = Date.now();
-        const entries: [string, number][] = Array.isArray(parsed)
-          ? parsed.filter(
-              (e: any): e is [string, number] =>
-                Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'number' && now - e[1] < REMOVED_PLAYLIST_ID_TTL_MS
-            )
-          : [];
-        return new Map(entries);
-      } catch {
-        return new Map<string, number>();
-      }
-    })()
-  );
+  const removedPlaylistIdsRef = useRef<Map<string, number>>(loadTombstoneMap(REMOVED_PLAYLIST_IDS_KEY, TOMBSTONE_TTL_MS));
+  const pruneAndPersistRemovedPlaylistIds = () =>
+    pruneAndPersistTombstoneMap(removedPlaylistIdsRef.current, REMOVED_PLAYLIST_IDS_KEY, TOMBSTONE_TTL_MS);
 
-  // Drop any expired entries and persist whatever's left — called after every add/check so the
-  // stored set never grows unbounded and a stale entry can't outlive its TTL across reloads.
-  const pruneAndPersistRemovedPlaylistIds = () => {
-    const now = Date.now();
-    for (const [id, removedAt] of removedPlaylistIdsRef.current) {
-      if (now - removedAt >= REMOVED_PLAYLIST_ID_TTL_MS) {
-        removedPlaylistIdsRef.current.delete(id);
-      }
-    }
+  // The album list (PhotoAlbumView's albumsList) had no cloud sync at all before this — 100%
+  // localStorage, so clearing site data (or a fresh device) silently reset every custom album,
+  // including ones the user had deliberately deleted, back to the hardcoded defaults. Same
+  // whole-array-overwrite shape as the playlist, so it gets the same tombstone treatment.
+  const [roomAlbums, setRoomAlbums] = useState<any[]>(() => {
     try {
-      localStorage.setItem(REMOVED_PLAYLIST_IDS_KEY, JSON.stringify(Array.from(removedPlaylistIdsRef.current.entries())));
-    } catch {}
-  };
+      const saved = localStorage.getItem('lovesync_custom_albums_v2');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const REMOVED_ALBUM_IDS_KEY = 'lovesync_removed_album_ids';
+  const removedAlbumIdsRef = useRef<Map<string, number>>(loadTombstoneMap(REMOVED_ALBUM_IDS_KEY, TOMBSTONE_TTL_MS));
+  const pruneAndPersistRemovedAlbumIds = () =>
+    pruneAndPersistTombstoneMap(removedAlbumIdsRef.current, REMOVED_ALBUM_IDS_KEY, TOMBSTONE_TTL_MS);
 
-  // updateRoomPlaylist itself is defined further down, right after broadcastRoomChanges — it has
-  // to close over that function correctly (see the comment there for why this used to be broken).
+  // updateRoomPlaylist/updateRoomAlbums are defined further down, right after broadcastRoomChanges
+  // — they have to close over that function correctly (see the comment there for why this used to
+  // be broken).
 
   const isAuthenticated = useMemo(() => {
     const cur = getCurrentAuthUser();
@@ -697,10 +712,17 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         } catch {}
       }
 
-      // 4c. Sync Albums
+      // 4c. Sync Albums — same tombstone-filtered whole-array sync as playlist above. This used
+      // to only ever write to localStorage with no reactive state for PhotoAlbumView to read, so
+      // an incoming update from the room never actually reached the UI at all.
       if (Array.isArray(data.albums) && data.albums.length > 0) {
+        pruneAndPersistRemovedAlbumIds();
+        const incomingAlbums = removedAlbumIdsRef.current.size > 0
+          ? data.albums.filter((a: any) => !a?.id || !removedAlbumIdsRef.current.has(a.id))
+          : data.albums;
+        setRoomAlbums(incomingAlbums);
         try {
-          localStorage.setItem('lovesync_custom_albums_v2', JSON.stringify(data.albums));
+          localStorage.setItem('lovesync_custom_albums_v2', JSON.stringify(incomingAlbums));
         } catch {}
       }
 
@@ -861,6 +883,24 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         localStorage.setItem('lovesync_full_playlist_v3', JSON.stringify(newPlaylist));
       } catch {}
       broadcastRoomChanges({ playlist: newPlaylist });
+    },
+    [broadcastRoomChanges]
+  );
+
+  // Same shape/reasoning as updateRoomPlaylist just above (must depend on broadcastRoomChanges,
+  // not `[]`, or it goes stale the moment the room code changes after pairing).
+  const updateRoomAlbums = useCallback(
+    (newAlbums: any[], removedId?: string) => {
+      if (removedId) {
+        removedAlbumIdsRef.current.set(removedId, Date.now());
+        pruneAndPersistRemovedAlbumIds();
+      }
+      hasUserMutatedRef.current = true;
+      setRoomAlbums(newAlbums);
+      try {
+        localStorage.setItem('lovesync_custom_albums_v2', JSON.stringify(newAlbums));
+      } catch {}
+      broadcastRoomChanges({ albums: newAlbums });
     },
     [broadcastRoomChanges]
   );
@@ -1942,7 +1982,15 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           ...prev,
           ...userProfile,
           id: cleanUserId,
-          name: user.displayName || userProfile.name || user.username,
+          // Same priority as avatar below: a custom name the user already set (saved to their
+          // account profile, or already showing locally and not just the generic placeholder)
+          // must win over the raw Google account name — otherwise every Google re-login silently
+          // discarded a custom display name in favor of whatever the Gmail account is named.
+          name:
+            userProfile.name ||
+            (prev.name && prev.name !== 'Bạn' ? prev.name : null) ||
+            user.displayName ||
+            user.username,
           // Prefer a custom avatar the user already set (saved to their account profile, or
           // already showing locally and not just the generic placeholder) over the raw
           // Google/OAuth photo — otherwise every Google re-login silently discards a custom
@@ -2061,6 +2109,8 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         sendTypingStatus,
         roomPlaylist,
         updateRoomPlaylist,
+        roomAlbums,
+        updateRoomAlbums,
         exportData,
         importData,
       }}

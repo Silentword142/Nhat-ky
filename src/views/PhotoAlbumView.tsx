@@ -122,6 +122,8 @@ export const PhotoAlbumView: React.FC = () => {
     isGoogleDriveConnected,
     googleDriveFolderUrl,
     connectGoogleDrive,
+    roomAlbums,
+    updateRoomAlbums,
   } = useCouple();
   const currentTheme = THEMES[settings.theme] || THEMES.sakura;
 
@@ -135,10 +137,25 @@ export const PhotoAlbumView: React.FC = () => {
     }
   });
 
-  // Save albums
+  // Save albums locally (device cache — the room's roomAlbums below is the actual shared source
+  // of truth, this is just what shows up instantly before that has a chance to load).
   useEffect(() => {
     localStorage.setItem(STORAGE_ALBUMS_KEY, JSON.stringify(albumsList));
   }, [albumsList]);
+
+  // Pick up the couple's shared album list from the room whenever it changes — without this, an
+  // album created/edited/deleted on one device (or synced in from the room) never actually
+  // reached this device's displayed albumsList at all, since it previously only ever read from
+  // this device's own localStorage.
+  useEffect(() => {
+    if (Array.isArray(roomAlbums) && roomAlbums.length > 0) {
+      const currentIds = albumsList.map((a) => a.id).join(',');
+      const newIds = roomAlbums.map((a: Album) => a.id).join(',');
+      if (currentIds !== newIds) {
+        setAlbumsList(roomAlbums);
+      }
+    }
+  }, [roomAlbums]);
 
   // Google Drive folder discovery & scanning state
   const [isScanningDrive, setIsScanningDrive] = useState(false);
@@ -881,19 +898,19 @@ export const PhotoAlbumView: React.FC = () => {
     // stream album, bump its approximate count so the overview card stays roughly accurate
     // without needing a full rescan.
     if (newPhotosPayload[0]?.imageUrl) {
-      setAlbumsList((prev) =>
-        prev.map((alb) => {
-          const matchesTarget = isStreamUpload
-            ? alb.isStreamAlbum && alb.driveFolderId === streamFolderId
-            : alb.id === targetAlbum || alb.name === targetAlbum;
-          if (!matchesTarget) return alb;
-          return {
-            ...alb,
-            coverImage: !alb.coverImage || alb.coverImage.includes('unsplash') ? newPhotosPayload[0].imageUrl : alb.coverImage,
-            approxPhotoCount: alb.isStreamAlbum ? (alb.approxPhotoCount || 0) + newPhotosPayload.length : alb.approxPhotoCount,
-          };
-        })
-      );
+      const updatedAlbums = albumsList.map((alb) => {
+        const matchesTarget = isStreamUpload
+          ? alb.isStreamAlbum && alb.driveFolderId === streamFolderId
+          : alb.id === targetAlbum || alb.name === targetAlbum;
+        if (!matchesTarget) return alb;
+        return {
+          ...alb,
+          coverImage: !alb.coverImage || alb.coverImage.includes('unsplash') ? newPhotosPayload[0].imageUrl : alb.coverImage,
+          approxPhotoCount: alb.isStreamAlbum ? (alb.approxPhotoCount || 0) + newPhotosPayload.length : alb.approxPhotoCount,
+        };
+      });
+      setAlbumsList(updatedAlbums);
+      updateRoomAlbums(updatedAlbums);
     }
 
     // Reset and close
@@ -973,19 +990,19 @@ export const PhotoAlbumView: React.FC = () => {
 
     if (editingAlbum) {
       // Edit existing album
-      setAlbumsList((prev) =>
-        prev.map((a) =>
-          a.id === editingAlbum.id
-            ? {
-                ...a,
-                name: albumFormName.trim(),
-                description: albumFormDesc.trim(),
-                coverImage: albumFormCover.trim() || a.coverImage,
-                color: albumFormColor,
-              }
-            : a
-        )
+      const updated = albumsList.map((a) =>
+        a.id === editingAlbum.id
+          ? {
+              ...a,
+              name: albumFormName.trim(),
+              description: albumFormDesc.trim(),
+              coverImage: albumFormCover.trim() || a.coverImage,
+              color: albumFormColor,
+            }
+          : a
       );
+      setAlbumsList(updated);
+      updateRoomAlbums(updated);
     } else {
       // Create new album
       const newAlbum: Album = {
@@ -998,7 +1015,9 @@ export const PhotoAlbumView: React.FC = () => {
         color: albumFormColor,
         createdAt: Date.now(),
       };
-      setAlbumsList((prev) => [...prev, newAlbum]);
+      const updated = [...albumsList, newAlbum];
+      setAlbumsList(updated);
+      updateRoomAlbums(updated);
     }
 
     setEditingAlbum(null);
@@ -1018,7 +1037,9 @@ export const PhotoAlbumView: React.FC = () => {
     if (!deleteConfirmAlbum) return;
     const albumId = deleteConfirmAlbum.id;
     soundService.playPop();
-    setAlbumsList((prev) => prev.filter((a) => a.id !== albumId));
+    const updated = albumsList.filter((a) => a.id !== albumId);
+    setAlbumsList(updated);
+    updateRoomAlbums(updated, albumId);
     if (activeAlbumId === albumId || activeAlbumId === deleteConfirmAlbum.name) {
       setActiveAlbumId(null);
     }
