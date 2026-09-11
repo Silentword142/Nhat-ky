@@ -565,6 +565,7 @@ export const PhotoAlbumView: React.FC = () => {
           id: `stream_${node.id}`,
           name: node.name,
           description: parent ? `Thư mục con của "${parent.name}"` : `Thư mục cá nhân "${activeCustomFolder.name}"`,
+          coverImage: node.coverFileId ? `https://drive.google.com/thumbnail?id=${node.coverFileId}&sz=w600` : undefined,
           color: '#34D399',
           createdAt: Date.now(),
           driveFolderId: node.id,
@@ -585,7 +586,17 @@ export const PhotoAlbumView: React.FC = () => {
         for (const alb of flattened) {
           const idx = updated.findIndex((a) => a.driveFolderId === alb.driveFolderId && a.isStreamAlbum);
           if (idx >= 0) {
-            updated[idx] = { ...updated[idx], ...alb, id: updated[idx].id, coverImage: updated[idx].coverImage, color: updated[idx].color || alb.color };
+            // A manually-set cover (via "Sửa Tệp") must stick; only adopt the freshly-scanned
+            // cover when the album doesn't already have a real one of its own.
+            const existingCover = updated[idx].coverImage;
+            const hasRealExistingCover = existingCover && !existingCover.includes('unsplash');
+            updated[idx] = {
+              ...updated[idx],
+              ...alb,
+              id: updated[idx].id,
+              coverImage: hasRealExistingCover ? existingCover : alb.coverImage,
+              color: updated[idx].color || alb.color,
+            };
           } else {
             updated.push(alb);
           }
@@ -1338,6 +1349,7 @@ export const PhotoAlbumView: React.FC = () => {
               // swapped out just because a newer photo got uploaded later. Only fall through to
               // "whatever photo is first" while the album still has its default/placeholder cover.
               const hasRealCover = album.coverImage && !album.coverImage.includes('unsplash');
+              const coverIsFirstPhoto = !hasRealCover && !!(albumPhotos[0]?.thumbnailUrl || albumPhotos[0]?.imageUrl);
               const coverImg =
                 (hasRealCover ? album.coverImage : null) ||
                 albumPhotos[0]?.thumbnailUrl ||
@@ -1402,8 +1414,8 @@ export const PhotoAlbumView: React.FC = () => {
                     <SmartDriveImage
                       src={coverImg}
                       thumbnailSize={600}
-                      originalFileId={albumPhotos[0]?.originalFileId}
-                      driveViewUrl={albumPhotos[0]?.driveViewUrl}
+                      originalFileId={coverIsFirstPhoto ? albumPhotos[0]?.originalFileId : undefined}
+                      driveViewUrl={coverIsFirstPhoto ? albumPhotos[0]?.driveViewUrl : undefined}
                       alt={album.name}
                       containerClassName="w-full h-full"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"

@@ -940,6 +940,7 @@ export interface DriveFolderNode {
   driveFolderUrl: string;
   approxPhotoCount: number;
   hasMorePhotosThanCounted: boolean;
+  coverFileId?: string;
   subfolders: DriveFolderNode[];
 }
 
@@ -997,8 +998,9 @@ export async function scanDriveFolderStructure(
     }
 
     // One cheap page (up to 1000) to approximate how many photos are directly in a folder,
-    // without paginating through the whole thing.
-    async function countPhotosApprox(folderId: string): Promise<{ count: number; hasMore: boolean }> {
+    // without paginating through the whole thing. Also grabs the first file's id so the folder
+    // card can show a real thumbnail instead of a generic placeholder.
+    async function countPhotosApprox(folderId: string): Promise<{ count: number; hasMore: boolean; firstFileId?: string }> {
       const q = `'${folderId}' in parents and mimeType contains 'image/' and trashed = false`;
       const fields = 'nextPageToken, files(id)';
       const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&pageSize=1000&spaces=drive`;
@@ -1007,14 +1009,14 @@ export async function scanDriveFolderStructure(
         if (!res.ok) return { count: 0, hasMore: false };
         const data = await res.json();
         const files = Array.isArray(data.files) ? data.files : [];
-        return { count: files.length, hasMore: !!data.nextPageToken };
+        return { count: files.length, hasMore: !!data.nextPageToken, firstFileId: files[0]?.id };
       } catch {
         return { count: 0, hasMore: false };
       }
     }
 
     async function buildNode(id: string, name: string, webViewLink: string | undefined, depth: number): Promise<DriveFolderNode> {
-      const [{ count, hasMore }, children] = await Promise.all([
+      const [{ count, hasMore, firstFileId }, children] = await Promise.all([
         countPhotosApprox(id),
         depth > 0 ? listSubfolders(id) : Promise.resolve([]),
       ]);
@@ -1034,6 +1036,7 @@ export async function scanDriveFolderStructure(
         driveFolderUrl: webViewLink || `https://drive.google.com/drive/folders/${id}`,
         approxPhotoCount: count,
         hasMorePhotosThanCounted: hasMore,
+        coverFileId: firstFileId,
         subfolders,
       };
     }
