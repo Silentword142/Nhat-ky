@@ -540,11 +540,26 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           if (liveUser.profile || liveUser.avatar || liveUser.displayName || liveUser.birthday || liveUser.bio || liveUser.loveQuote) {
             const userProfile = liveUser.profile || {};
             setMyProfileState((prev) => {
+              // Third occurrence of the same priority bug already fixed in loginWithGoogle and
+              // loginWithUserAccount: this "authoritative check" effect runs on every app mount
+              // (not just an explicit login), so even after those two fixes, a custom display
+              // name/avatar kept getting silently overwritten back to the raw account
+              // displayName/photo moments after every single page load. Custom saved value must
+              // win, exactly like the other two spots.
               const updated: CoupleProfile = {
                 ...prev,
                 ...userProfile,
-                name: liveUser.displayName || userProfile.name || prev.name,
-                avatar: liveUser.avatar || liveUser.photoURL || userProfile.avatar || prev.avatar,
+                name:
+                  userProfile.name ||
+                  (prev.name && prev.name !== 'Bạn' ? prev.name : null) ||
+                  liveUser.displayName ||
+                  prev.name,
+                avatar:
+                  userProfile.avatar ||
+                  (prev.avatar && prev.avatar !== DEFAULT_AVATAR_ME ? prev.avatar : null) ||
+                  liveUser.avatar ||
+                  liveUser.photoURL ||
+                  prev.avatar,
                 birthday: liveUser.birthday || userProfile.birthday || prev.birthday,
                 gender: liveUser.gender || userProfile.gender || prev.gender,
                 bio: liveUser.bio || userProfile.bio || prev.bio,
