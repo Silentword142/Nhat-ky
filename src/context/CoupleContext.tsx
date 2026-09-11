@@ -686,13 +686,11 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // landed yet, or a snapshot arrived out of order) can't resurrect a track just deleted.
       // Expired entries are pruned first — see removedPlaylistIdsRef's declaration for why this
       // must never be a permanent blacklist.
-      console.log('[DEBUG playlist]', source, 'isArray:', Array.isArray(data.playlist), 'len:', data.playlist?.length, 'tombstones:', Array.from(removedPlaylistIdsRef.current.entries()));
       if (Array.isArray(data.playlist) && data.playlist.length > 0) {
         pruneAndPersistRemovedPlaylistIds();
         const incomingPlaylist = removedPlaylistIdsRef.current.size > 0
           ? data.playlist.filter((t: any) => !t?.id || !removedPlaylistIdsRef.current.has(t.id))
           : data.playlist;
-        console.log('[DEBUG playlist] after filter:', incomingPlaylist.map((t: any) => t.id));
         setRoomPlaylist(incomingPlaylist);
         try {
           localStorage.setItem('lovesync_full_playlist_v3', JSON.stringify(incomingPlaylist));
