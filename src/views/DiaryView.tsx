@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Plus,
@@ -58,12 +58,13 @@ const WEATHERS = [
 
 const QUICK_REACTIONS = ['❤️', '🥰', '🫂', '💋', '💌', '🌸'];
 
-// A "page" is now purely a visual/notebook-aesthetic notion — 16 lines is what one physical leaf
-// is themed to hold, shown as a live counter, but writing never hard-splits at this line and never
-// creates a new saved record because of it (see handleSavePage: one diary entry per day).
-const MAX_LINES_PER_PAGE = 16;
+// A "page" while writing is a fixed-height, 15-line viewport onto the day's one growing entry
+// (see handleSavePage: still a single saved record per day) — typing past line 15 auto-scrolls
+// to a fresh page the same way a browser keeps a caret in view; Trang Trước/Sau below just jumps
+// that same scroll position by one page, so flipping back and forth never needs a save.
+const MAX_LINES_PER_PAGE = 15;
 const NOTEBOOK_LINE_HEIGHT_PX = 36;
-const MIN_TEXTAREA_HEIGHT_PX = MAX_LINES_PER_PAGE * NOTEBOOK_LINE_HEIGHT_PX;
+const PAGE_VIEWPORT_HEIGHT_PX = MAX_LINES_PER_PAGE * NOTEBOOK_LINE_HEIGHT_PX;
 
 export const DiaryView: React.FC = () => {
   const {
@@ -203,22 +204,44 @@ export const DiaryView: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
-  // Live "how full is this page" counter, purely informational. Measured from the actual rendered
-  // textarea (scrollHeight / line-height) instead of a character-count guess — a guess never lines
-  // up with real wrapping (variable glyph widths, Vietnamese diacritics, the textarea's actual
-  // padding/width), which is exactly why the page used to turn early, mid-line. This effect also
-  // auto-grows the textarea to fit its content, since writing no longer hard-caps at one page.
+  // Live line counter, measured from the actual rendered textarea (scrollHeight — which reflects
+  // the full content height even while the box itself has a fixed, scrollable viewport — divided
+  // by line-height) instead of a character-count guess. A guess never lines up with real wrapping
+  // (variable glyph widths, Vietnamese diacritics, the textarea's actual padding/width), which is
+  // exactly why the page used to turn early, mid-line.
   const [currentLinesCount, setCurrentLinesCount] = useState(1);
+  // Which one-page-tall (15-line) slice of the textarea's scroll position is currently in view
+  // while writing/editing — purely a "Trang X/Y" display + Trang Trước/Sau navigation concern, see
+  // handleWriteAreaScroll/scrollToWritePage below. Never affects what's saved.
+  const [writeVirtualPage, setWriteVirtualPage] = useState(1);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
-    ta.style.height = 'auto';
-    const measuredHeight = ta.scrollHeight;
-    ta.style.height = `${Math.max(measuredHeight, MIN_TEXTAREA_HEIGHT_PX)}px`;
     const lineHeightPx = parseFloat(window.getComputedStyle(ta).lineHeight) || NOTEBOOK_LINE_HEIGHT_PX;
-    setCurrentLinesCount(Math.max(1, Math.round(measuredHeight / lineHeightPx)));
-  }, [inlineContent, pageMode]);
+    setCurrentLinesCount(Math.max(1, Math.round(ta.scrollHeight / lineHeightPx)));
+  }, [inlineContent]);
+
+  const writeTotalVirtualPages = Math.max(1, Math.ceil(currentLinesCount / MAX_LINES_PER_PAGE));
+
+  const handleWriteAreaScroll = () => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const page = Math.floor(ta.scrollTop / PAGE_VIEWPORT_HEIGHT_PX) + 1;
+    setWriteVirtualPage(Math.min(Math.max(1, page), writeTotalVirtualPages));
+  };
+
+  // Flip to a specific 1-indexed virtual page within the CURRENT unsaved draft — just scrolls the
+  // same textarea, so reviewing an earlier or later part of what's being written never needs a
+  // save first.
+  const scrollToWritePage = (pageIdx: number) => {
+    const ta = textareaRef.current;
+    const clamped = Math.min(Math.max(1, pageIdx), writeTotalVirtualPages);
+    if (!ta || clamped === writeVirtualPage) return;
+    soundService.playPaperOpen();
+    ta.scrollTo({ top: (clamped - 1) * PAGE_VIEWPORT_HEIGHT_PX, behavior: 'smooth' });
+    setWriteVirtualPage(clamped);
+  };
 
   const absoluteDiariesOrder = useMemo(() => {
     if (!Array.isArray(diaries)) return [];
@@ -366,12 +389,17 @@ export const DiaryView: React.FC = () => {
       setInlineTime(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
       setIsFlipping(false);
       isTurningPageRef.current = false;
-      setTimeout(() => textareaRef.current?.focus(), 100);
+      setWriteVirtualPage(1);
+      setTimeout(() => {
+        if (textareaRef.current) textareaRef.current.scrollTop = 0;
+        textareaRef.current?.focus();
+      }, 100);
     }, 180);
   };
 
   // Writing just accumulates in inlineContent — no line-limit splitting, no auto-save. The
-  // textarea grows to fit (see the useLayoutEffect above); "Dòng X/16" is informational only.
+  // textarea's viewport is a fixed 15 lines tall; typing past it auto-scrolls to a fresh "page"
+  // the same way any textarea keeps the caret in view (see PAGE_VIEWPORT_HEIGHT_PX).
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInlineContent(e.target.value);
   };
@@ -391,6 +419,10 @@ export const DiaryView: React.FC = () => {
     setInlineMood(foundMood);
     const foundWeather = WEATHERS.find((w) => w.emoji === entry.weather) || WEATHERS[0];
     setInlineWeather(foundWeather);
+    setWriteVirtualPage(1);
+    setTimeout(() => {
+      if (textareaRef.current) textareaRef.current.scrollTop = 0;
+    }, 0);
   };
 
   // Photo upload with fast compression
@@ -1056,18 +1088,26 @@ export const DiaryView: React.FC = () => {
                       />
                     </div>
 
-                    {/* Ruled Notebook Lines — grows to fit whatever is written; the 16-line mark
-                        is a visual guide only, writing never gets cut off or split by it. */}
-                    <div className="relative rounded-2xl p-4 sm:p-5 lined-notebook-text border border-[#ecdac8] dark:border-zinc-800 shadow-inner min-h-[500px] sm:min-h-[600px]">
+                    {/* Ruled Notebook Lines — a fixed 15-line-tall page. Typing past it auto-
+                        scrolls to a fresh page (native textarea caret-follow behavior); Trang
+                        Trước/Sau below just moves that same scroll position, so flipping back to
+                        re-read an earlier part of today's draft never needs a save first. */}
+                    <div className="relative rounded-2xl p-4 sm:p-5 border border-[#ecdac8] dark:border-zinc-800 shadow-inner">
+                      {/* lined-notebook-text (not bg-transparent) lives on the textarea itself,
+                          not this wrapper — its `background-attachment: local` only scrolls the
+                          ruled lines together with content on the element that actually scrolls,
+                          which since this page became a fixed-height scrollable viewport is the
+                          textarea, not this static wrapper. */}
                       <textarea
                         ref={textareaRef}
-                        rows={16}
                         required
                         placeholder="Viết tâm tình của bạn tại đây... Từng chữ sẽ nằm ngay ngắn trên từng dòng kẻ ✍️"
                         value={inlineContent}
                         onChange={handleTextareaChange}
-                        className="w-full bg-transparent border-0 font-cute text-[16px] text-zinc-800 dark:text-zinc-100 focus:ring-0 leading-[36px] resize-none selectable-text pl-8 sm:pl-10 break-words break-all whitespace-pre-wrap outline-none overflow-hidden"
+                        onScroll={handleWriteAreaScroll}
+                        className="w-full border-0 font-cute text-[16px] text-zinc-800 dark:text-zinc-100 focus:ring-0 leading-[36px] resize-none selectable-text pl-8 sm:pl-10 break-words break-all whitespace-pre-wrap outline-none overflow-y-auto lined-notebook-text rounded-xl"
                         style={{
+                          height: `${PAGE_VIEWPORT_HEIGHT_PX}px`,
                           lineHeight: '36px',
                           wordBreak: 'break-word',
                           overflowWrap: 'anywhere',
@@ -1075,11 +1115,36 @@ export const DiaryView: React.FC = () => {
                         }}
                       />
 
-                      {/* Live Capacity Indicator */}
-                      <div className="absolute bottom-2 right-4 text-[10px] font-bold text-zinc-400 select-none bg-white/80 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-rose-100 dark:border-zinc-700 shadow-xs flex items-center gap-1.5 pointer-events-none">
-                        <span className={currentLinesCount >= MAX_LINES_PER_PAGE ? 'text-rose-500 font-bold' : ''}>
-                          Dòng {currentLinesCount}/{MAX_LINES_PER_PAGE}
-                        </span>
+                      {/* Draft Page Navigation + Live Capacity Indicator */}
+                      <div className="absolute bottom-2 right-4 flex items-center gap-1.5 select-none">
+                        {writeTotalVirtualPages > 1 && (
+                          <div className="flex items-center gap-1 bg-white/80 dark:bg-zinc-800/80 px-1.5 py-1 rounded-full border border-rose-100 dark:border-zinc-700 shadow-xs">
+                            <button
+                              type="button"
+                              onClick={() => scrollToWritePage(writeVirtualPage - 1)}
+                              disabled={writeVirtualPage <= 1}
+                              className="p-0.5 rounded-full text-zinc-500 hover:text-rose-500 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
+                              title="Xem lại trang trước (không cần lưu)"
+                            >
+                              <ChevronLeft className="w-3.5 h-3.5" />
+                            </button>
+                            <span className="text-[10px] font-bold text-zinc-500 px-0.5">
+                              Trang {writeVirtualPage}/{writeTotalVirtualPages}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => scrollToWritePage(writeVirtualPage + 1)}
+                              disabled={writeVirtualPage >= writeTotalVirtualPages}
+                              className="p-0.5 rounded-full text-zinc-500 hover:text-rose-500 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
+                              title="Sang xem trang tiếp theo (không cần lưu)"
+                            >
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                        <div className="text-[10px] font-bold text-zinc-400 bg-white/80 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-rose-100 dark:border-zinc-700 shadow-xs pointer-events-none">
+                          <span>Dòng {currentLinesCount}/{writeTotalVirtualPages * MAX_LINES_PER_PAGE}</span>
+                        </div>
                       </div>
                     </div>
 
