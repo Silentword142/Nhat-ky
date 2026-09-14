@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Plus,
@@ -58,10 +58,10 @@ const WEATHERS = [
 
 const QUICK_REACTIONS = ['❤️', '🥰', '🫂', '💋', '💌', '🌸'];
 
-// A "page" while writing is a fixed-height, 15-line viewport onto the day's one growing entry
-// (see handleSavePage: still a single saved record per day) — typing past line 15 auto-scrolls
-// to a fresh page the same way a browser keeps a caret in view; Trang Trước/Sau below just jumps
-// that same scroll position by one page, so flipping back and forth never needs a save.
+// A "page" while writing is a real, discrete 15-line leaf of the day's one growing entry (see
+// handleSavePage: still a single saved record per day, `pages` below just displays inlineContent
+// one leaf at a time) — typing past line 15 snaps to a fresh page with a flip, matching the
+// original notebook feel; Trang Trước/Sau just swaps which leaf is shown, no save needed.
 const MAX_LINES_PER_PAGE = 15;
 const NOTEBOOK_LINE_HEIGHT_PX = 36;
 const PAGE_VIEWPORT_HEIGHT_PX = MAX_LINES_PER_PAGE * NOTEBOOK_LINE_HEIGHT_PX;
@@ -155,6 +155,9 @@ export const DiaryView: React.FC = () => {
   const [isDeleteEntireDayModalOpen, setIsDeleteEntireDayModalOpen] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // Off-screen element with the exact same font/width/padding as the write textarea, used only to
+  // measure real wrapped line breaks (see splitOnePage below) — never shown, never interacted with.
+  const mirrorRef = useRef<HTMLDivElement | null>(null);
 
   // Universal Lightbox Zoom state
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -204,32 +207,83 @@ export const DiaryView: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
-  // Live line counter, measured from the actual rendered textarea (scrollHeight — which reflects
-  // the full content height even while the box itself has a fixed, scrollable viewport — divided
-  // by line-height) instead of a character-count guess. A guess never lines up with real wrapping
-  // (variable glyph widths, Vietnamese diacritics, the textarea's actual padding/width), which is
-  // exactly why the page used to turn early, mid-line.
-  const [currentLinesCount, setCurrentLinesCount] = useState(1);
-  // Which one-page-tall (15-line) slice of the textarea's scroll position is currently in view
-  // while writing/editing — purely a "Trang X/Y" display + Trang Trước/Sau navigation concern, see
-  // handleWriteAreaScroll/scrollToWritePage below. Never affects what's saved.
-  const [writeVirtualPage, setWriteVirtualPage] = useState(1);
+  // Which page of the CURRENT unsaved draft is showing in the textarea right now (0-indexed).
+  // The textarea only ever holds ONE page's worth of text (pages[currentPageIdx]) — not the whole
+  // draft — so filling a page and moving to the next is an actual instant swap-with-flip, the same
+  // as the original design, rather than one big box scrolling. inlineContent (the full text, all
+  // pages concatenated) stays the single source of truth that gets saved.
+  const [currentPageIdx, setCurrentPageIdx] = useState(0);
 
-  useEffect(() => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    const lineHeightPx = parseFloat(window.getComputedStyle(ta).lineHeight) || NOTEBOOK_LINE_HEIGHT_PX;
-    setCurrentLinesCount(Math.max(1, Math.round(ta.scrollHeight / lineHeightPx)));
-  }, [inlineContent]);
+  // The mirror element (used by splitOnePage below) only exists in the DOM once pageMode is
+  // 'write', and refs only attach AFTER a render commits — so on the very first render that
+  // switches into write mode, `pages` below would compute with mirrorRef.current still null and
+  // wrongly treat the whole entry as one unsplit page. This bumps a tick once the mirror is
+  // actually attached, forcing `pages` to recompute correctly right after.
+  const [mirrorReadyTick, setMirrorReadyTick] = useState(0);
+  useLayoutEffect(() => {
+    if (mirrorRef.current) {
+      setMirrorReadyTick((t) => t + 1);
+    }
+  }, [pageMode, editingEntryId]);
 
-  const writeTotalVirtualPages = Math.max(1, Math.ceil(currentLinesCount / MAX_LINES_PER_PAGE));
-  // Last virtual page we already showed the flip effect for — lets the scroll handler tell "typing
-  // just crossed onto a fresh page" (play the flip) apart from "still mid-scroll toward a page we
-  // already announced" (every tick of a smooth scroll fires its own scroll event).
-  const lastFlipPageRef = useRef(1);
-  // Set for the duration of a manual scrollToWritePage() call, which plays its own flip effect —
-  // suppresses a second, redundant one from the scroll events that same programmatic scroll fires.
-  const isManualDraftScrollRef = useRef(false);
+  const measureMirrorHeight = (text: string): number => {
+    const mirror = mirrorRef.current;
+    if (!mirror) return 0;
+    mirror.textContent = text.length > 0 ? text : '​';
+    return mirror.scrollHeight;
+  };
+
+  // Splits `text` at the point where it would first exceed maxLines, using the real rendered
+  // height of the hidden mirror (matching the textarea's exact font/width/padding) rather than a
+  // character-count guess — a guess never lines up with real wrapping (variable glyph widths,
+  // Vietnamese diacritics), which is exactly why the page used to turn early, mid-line. Binary
+  // search finds the cut; `fits`+`overflow` always concatenate back to exactly `text`.
+  const splitOnePage = (text: string, maxLines: number): { fits: string; overflow: string } => {
+    const mirror = mirrorRef.current;
+    if (!mirror || !text) return { fits: text, overflow: '' };
+    const lineHeightPx = parseFloat(window.getComputedStyle(mirror).lineHeight) || NOTEBOOK_LINE_HEIGHT_PX;
+    const maxHeight = maxLines * lineHeightPx;
+    if (measureMirrorHeight(text) <= maxHeight + 0.5) {
+      return { fits: text, overflow: '' };
+    }
+    let lo = 0;
+    let hi = text.length;
+    let best = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (measureMirrorHeight(text.slice(0, mid)) <= maxHeight + 0.5) {
+        best = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    let cut = best > 0 ? best : Math.min(1, text.length);
+    // Prefer to break on a space/newline near the cut so a word isn't split mid-character —
+    // without losing or adding any characters (the boundary char itself stays on the fitting page).
+    const windowStart = Math.max(0, cut - 40);
+    const boundary = Math.max(text.lastIndexOf('\n', cut - 1), text.lastIndexOf(' ', cut - 1));
+    if (boundary >= windowStart && boundary < cut) {
+      cut = boundary + 1;
+    }
+    return { fits: text.slice(0, cut), overflow: text.slice(cut) };
+  };
+
+  // The full draft re-chunked into 15-line pages, recomputed whenever the content changes. Pure
+  // partitioning — pages.join('') always reconstructs inlineContent exactly.
+  const pages = useMemo(() => {
+    if (!mirrorRef.current) return [inlineContent];
+    const result: string[] = [];
+    let remaining = inlineContent;
+    // Safety cap so a pathological input can't loop forever; a real diary entry won't come close.
+    for (let i = 0; i < 500 && remaining.length > 0; i++) {
+      const { fits, overflow } = splitOnePage(remaining, MAX_LINES_PER_PAGE);
+      result.push(fits);
+      remaining = overflow;
+    }
+    return result.length > 0 ? result : [''];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inlineContent, mirrorReadyTick]);
 
   const playDraftPageFlip = (direction: 'next' | 'prev') => {
     soundService.playPaperOpen();
@@ -238,37 +292,32 @@ export const DiaryView: React.FC = () => {
     setTimeout(() => setIsFlipping(false), 320);
   };
 
-  // Typing past line 15 auto-scrolls the textarea (native caret-follow) — this just notices that
-  // crossing and plays the same "trang lật" (page turn) feedback the manual buttons use, so filling
-  // a page and moving to the next one is visibly, audibly a page turn, not a silent scroll.
-  const handleWriteAreaScroll = () => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    const page = Math.min(Math.max(1, Math.floor(ta.scrollTop / PAGE_VIEWPORT_HEIGHT_PX) + 1), writeTotalVirtualPages);
-    if (page === lastFlipPageRef.current) return;
-    const direction = page > lastFlipPageRef.current ? 'next' : 'prev';
-    lastFlipPageRef.current = page;
-    setWriteVirtualPage(page);
-    if (!isManualDraftScrollRef.current) {
-      playDraftPageFlip(direction);
+  // Reconstructs the full draft with just the CURRENT page's text replaced, then — if that page's
+  // new text overflows 15 lines on its own — splits it and pushes the overflow onto the next page,
+  // advancing there with a flip. Pasting/typing several pages' worth at once only cascades one
+  // level per keystroke (matches the original app's behavior); another keystroke cascades further.
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const before = pages.slice(0, currentPageIdx).join('');
+    const after = pages.slice(currentPageIdx + 1).join('');
+    const { fits, overflow } = splitOnePage(e.target.value, MAX_LINES_PER_PAGE);
+    if (!overflow) {
+      setInlineContent(before + fits + after);
+      return;
     }
+    setInlineContent(before + fits + overflow + after);
+    playDraftPageFlip('next');
+    setCurrentPageIdx((prev) => prev + 1);
   };
 
-  // Flip to a specific 1-indexed virtual page within the CURRENT unsaved draft — just scrolls the
-  // same textarea, so reviewing an earlier or later part of what's being written never needs a
-  // save first.
+  // Flip to a specific 1-indexed page of the CURRENT unsaved draft — just swaps which page's text
+  // the textarea shows, so reviewing an earlier or later part of what's being written never needs
+  // a save first.
   const scrollToWritePage = (pageIdx: number) => {
-    const ta = textareaRef.current;
-    const clamped = Math.min(Math.max(1, pageIdx), writeTotalVirtualPages);
-    if (!ta || clamped === writeVirtualPage) return;
-    isManualDraftScrollRef.current = true;
-    playDraftPageFlip(clamped > writeVirtualPage ? 'next' : 'prev');
-    lastFlipPageRef.current = clamped;
-    setWriteVirtualPage(clamped);
-    ta.scrollTo({ top: (clamped - 1) * PAGE_VIEWPORT_HEIGHT_PX, behavior: 'smooth' });
-    setTimeout(() => {
-      isManualDraftScrollRef.current = false;
-    }, 400);
+    const clamped = Math.min(Math.max(1, pageIdx), pages.length);
+    if (clamped === currentPageIdx + 1) return;
+    playDraftPageFlip(clamped > currentPageIdx + 1 ? 'next' : 'prev');
+    setCurrentPageIdx(clamped - 1);
+    setTimeout(() => textareaRef.current?.focus(), 200);
   };
 
   const absoluteDiariesOrder = useMemo(() => {
@@ -417,20 +466,11 @@ export const DiaryView: React.FC = () => {
       setInlineTime(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
       setIsFlipping(false);
       isTurningPageRef.current = false;
-      lastFlipPageRef.current = 1;
-      setWriteVirtualPage(1);
+      setCurrentPageIdx(0);
       setTimeout(() => {
-        if (textareaRef.current) textareaRef.current.scrollTop = 0;
         textareaRef.current?.focus();
       }, 100);
     }, 180);
-  };
-
-  // Writing just accumulates in inlineContent — no line-limit splitting, no auto-save. The
-  // textarea's viewport is a fixed 15 lines tall; typing past it auto-scrolls to a fresh "page"
-  // the same way any textarea keeps the caret in view (see PAGE_VIEWPORT_HEIGHT_PX).
-  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInlineContent(e.target.value);
   };
 
   // Start editing existing page
@@ -448,11 +488,7 @@ export const DiaryView: React.FC = () => {
     setInlineMood(foundMood);
     const foundWeather = WEATHERS.find((w) => w.emoji === entry.weather) || WEATHERS[0];
     setInlineWeather(foundWeather);
-    lastFlipPageRef.current = 1;
-    setWriteVirtualPage(1);
-    setTimeout(() => {
-      if (textareaRef.current) textareaRef.current.scrollTop = 0;
-    }, 0);
+    setCurrentPageIdx(0);
   };
 
   // Photo upload with fast compression
@@ -1118,35 +1154,51 @@ export const DiaryView: React.FC = () => {
                       />
                     </div>
 
-                    {/* Ruled Notebook Lines — a fixed 15-line-tall page. Typing past it auto-
-                        scrolls to a fresh page (native textarea caret-follow behavior); Trang
-                        Trước/Sau below just moves that same scroll position, so flipping back to
-                        re-read an earlier part of today's draft never needs a save first. */}
-                    <div className="relative rounded-2xl border border-[#ecdac8] dark:border-zinc-800 shadow-inner overflow-hidden">
-                      {/* lined-notebook-text (not bg-transparent) lives on the textarea itself,
-                          not this wrapper — its `background-attachment: local` only scrolls the
-                          ruled lines together with content on the element that actually scrolls,
-                          which since this page became a fixed-height scrollable viewport is the
-                          textarea, not this static wrapper. Padding is set entirely here (not
-                          split between this wrapper and a Tailwind pl- class) so the left margin
-                          reliably clears the red rule line drawn at x=48-50px by the CSS class,
-                          and the top margin clears the wrapper's own border. */}
+                    {/* Ruled Notebook Lines — a real, discrete 15-line page. Typing past it snaps
+                        (with the same flip sound/animation as Trang Trước/Sau) to a fresh page
+                        instead of scrolling; inlineContent is still one continuous string —
+                        `pages` below just displays it one leaf at a time. pt-4 here (not padding
+                        on the ruled element itself) gives the top margin, since any padding-top on
+                        the ruled-lines element would shift text out of alignment with the fixed
+                        36px rule spacing baked into its background-image. */}
+                    <div className="relative rounded-2xl border border-[#ecdac8] dark:border-zinc-800 shadow-inner overflow-hidden bg-[#fffdf9] dark:bg-[#1a171f] pt-4">
+                      {/* Hidden measuring element — exact same font/width/padding as the textarea
+                          below, used only to find real wrapped line breaks (splitOnePage). Never
+                          visible; `invisible` (not `hidden`) so its scrollHeight stays readable. */}
+                      <div
+                        ref={mirrorRef}
+                        aria-hidden="true"
+                        className="invisible absolute top-0 left-0 right-0 font-cute text-[16px] break-words break-all whitespace-pre-wrap pointer-events-none"
+                        style={{
+                          lineHeight: '36px',
+                          wordBreak: 'break-word',
+                          overflowWrap: 'anywhere',
+                          whiteSpace: 'pre-wrap',
+                          paddingLeft: '60px',
+                          paddingRight: '20px',
+                          height: 'auto',
+                        }}
+                      />
+
+                      {/* lined-notebook-text (not bg-transparent) lives on the textarea itself so
+                          its `background-attachment: local` ruled lines line up exactly with this
+                          page's own text — no padding-top here (see wrapper's pt-4 above), so line
+                          1 starts flush with the first rule. */}
                       <textarea
                         ref={textareaRef}
                         required
                         placeholder="Viết tâm tình của bạn tại đây... Từng chữ sẽ nằm ngay ngắn trên từng dòng kẻ ✍️"
-                        value={inlineContent}
+                        value={pages[currentPageIdx] ?? ''}
                         onChange={handleTextareaChange}
-                        onScroll={handleWriteAreaScroll}
-                        className="w-full border-0 font-cute text-[16px] text-zinc-800 dark:text-zinc-100 focus:ring-0 leading-[36px] resize-none selectable-text break-words break-all whitespace-pre-wrap outline-none overflow-y-auto lined-notebook-text"
+                        className="w-full border-0 font-cute text-[16px] text-zinc-800 dark:text-zinc-100 focus:ring-0 leading-[36px] resize-none selectable-text break-words break-all whitespace-pre-wrap outline-none overflow-hidden lined-notebook-text"
                         style={{
                           height: `${PAGE_VIEWPORT_HEIGHT_PX}px`,
                           lineHeight: '36px',
                           wordBreak: 'break-word',
                           overflowWrap: 'anywhere',
                           whiteSpace: 'pre-wrap',
-                          paddingTop: '18px',
-                          paddingBottom: '18px',
+                          paddingTop: 0,
+                          paddingBottom: 0,
                           paddingLeft: '60px',
                           paddingRight: '20px',
                         }}
@@ -1170,37 +1222,32 @@ export const DiaryView: React.FC = () => {
                         )}
                       </AnimatePresence>
 
-                      {/* Draft Page Navigation + Live Capacity Indicator */}
-                      <div className="absolute bottom-2 right-4 flex items-center gap-1.5 select-none">
-                        {writeTotalVirtualPages > 1 && (
-                          <div className="flex items-center gap-1 bg-white/80 dark:bg-zinc-800/80 px-1.5 py-1 rounded-full border border-rose-100 dark:border-zinc-700 shadow-xs">
-                            <button
-                              type="button"
-                              onClick={() => scrollToWritePage(writeVirtualPage - 1)}
-                              disabled={writeVirtualPage <= 1}
-                              className="p-0.5 rounded-full text-zinc-500 hover:text-rose-500 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
-                              title="Xem lại trang trước (không cần lưu)"
-                            >
-                              <ChevronLeft className="w-3.5 h-3.5" />
-                            </button>
-                            <span className="text-[10px] font-bold text-zinc-500 px-0.5">
-                              Trang {writeVirtualPage}/{writeTotalVirtualPages}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => scrollToWritePage(writeVirtualPage + 1)}
-                              disabled={writeVirtualPage >= writeTotalVirtualPages}
-                              className="p-0.5 rounded-full text-zinc-500 hover:text-rose-500 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
-                              title="Sang xem trang tiếp theo (không cần lưu)"
-                            >
-                              <ChevronRight className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        )}
-                        <div className="text-[10px] font-bold text-zinc-400 bg-white/80 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-rose-100 dark:border-zinc-700 shadow-xs pointer-events-none">
-                          <span>Dòng {currentLinesCount}/{writeTotalVirtualPages * MAX_LINES_PER_PAGE}</span>
+                      {/* Draft Page Navigation */}
+                      {pages.length > 1 && (
+                        <div className="absolute bottom-2 right-4 flex items-center gap-1 bg-white/80 dark:bg-zinc-800/80 px-1.5 py-1 rounded-full border border-rose-100 dark:border-zinc-700 shadow-xs select-none">
+                          <button
+                            type="button"
+                            onClick={() => scrollToWritePage(currentPageIdx)}
+                            disabled={currentPageIdx <= 0}
+                            className="p-0.5 rounded-full text-zinc-500 hover:text-rose-500 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
+                            title="Xem lại trang trước (không cần lưu)"
+                          >
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="text-[10px] font-bold text-zinc-500 px-0.5">
+                            Trang {currentPageIdx + 1}/{pages.length}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => scrollToWritePage(currentPageIdx + 2)}
+                            disabled={currentPageIdx >= pages.length - 1}
+                            className="p-0.5 rounded-full text-zinc-500 hover:text-rose-500 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
+                            title="Sang xem trang tiếp theo (không cần lưu)"
+                          >
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
                         </div>
-                      </div>
+                      )}
                     </div>
 
                     {/* Attached Photos in Write Mode */}
