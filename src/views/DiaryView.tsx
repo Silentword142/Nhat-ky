@@ -716,8 +716,8 @@ export const DiaryView: React.FC = () => {
         {/* 1. LOVE CALENDAR & FLO CYCLE TRACKER (4 COLS)                             */}
         {/* ========================================================================= */}
         <div className="lg:col-span-4 space-y-4">
-          {/* FLO CYCLE QUICK GLANCE WIDGET — only for whoever set their gender to "Nữ" in profile */}
-          {myProfile.gender === 'female' && (
+          {/* FLO CYCLE QUICK GLANCE WIDGET — visible to both partners (the shared room's cycle
+              data); whoever isn't "Nữ" sees it read-only, see CycleTrackerModal's readOnly prop. */}
           <div className="bg-gradient-to-br from-rose-500/10 via-pink-500/5 to-purple-500/10 dark:from-rose-950/40 dark:via-zinc-900 dark:to-purple-950/30 rounded-3xl p-4.5 border border-rose-200/80 dark:border-zinc-800 shadow-md space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -768,7 +768,6 @@ export const DiaryView: React.FC = () => {
               <span>{selectedDayCycleInfo.partnerCareTip}</span>
             </p>
           </div>
-          )}
 
           {/* CALENDAR CARD */}
           <div className="bg-white dark:bg-zinc-900 rounded-3xl p-5 border border-rose-100 dark:border-zinc-800 shadow-lg space-y-4">
@@ -838,8 +837,9 @@ export const DiaryView: React.FC = () => {
                   return <div key={`empty_${idx}`} className="h-10 sm:h-11" />;
                 }
 
-                // Flo highlight styling — only meaningful for whoever set gender to "Nữ"
-                const isFloEnabled = myProfile.gender === 'female';
+                // Flo highlight styling — visible to both partners (shared room data); gated on
+                // the tracker actually being enabled for the room, not on the viewer's own gender.
+                const isFloEnabled = cycleSettings.enabled !== false;
                 const isPeriodDay = isFloEnabled && item.isPeriod;
                 const isOvulationDay = isFloEnabled && item.isOvulation;
                 const isFertileDay = isFloEnabled && item.isFertile;
@@ -905,7 +905,7 @@ export const DiaryView: React.FC = () => {
 
             {/* Calendar Legend */}
             <div className="pt-2 flex items-center justify-center gap-3 text-[10px] text-zinc-500 dark:text-zinc-400 border-t border-rose-100/70 dark:border-zinc-800 flex-wrap font-cute">
-              {myProfile.gender === 'female' && (
+              {cycleSettings.enabled !== false && (
                 <>
                   <span className="flex items-center gap-1">
                     <span>🩸</span>
@@ -1122,12 +1122,15 @@ export const DiaryView: React.FC = () => {
                         scrolls to a fresh page (native textarea caret-follow behavior); Trang
                         Trước/Sau below just moves that same scroll position, so flipping back to
                         re-read an earlier part of today's draft never needs a save first. */}
-                    <div className="relative rounded-2xl p-4 sm:p-5 border border-[#ecdac8] dark:border-zinc-800 shadow-inner">
+                    <div className="relative rounded-2xl border border-[#ecdac8] dark:border-zinc-800 shadow-inner overflow-hidden">
                       {/* lined-notebook-text (not bg-transparent) lives on the textarea itself,
                           not this wrapper — its `background-attachment: local` only scrolls the
                           ruled lines together with content on the element that actually scrolls,
                           which since this page became a fixed-height scrollable viewport is the
-                          textarea, not this static wrapper. */}
+                          textarea, not this static wrapper. Padding is set entirely here (not
+                          split between this wrapper and a Tailwind pl- class) so the left margin
+                          reliably clears the red rule line drawn at x=48-50px by the CSS class,
+                          and the top margin clears the wrapper's own border. */}
                       <textarea
                         ref={textareaRef}
                         required
@@ -1135,13 +1138,17 @@ export const DiaryView: React.FC = () => {
                         value={inlineContent}
                         onChange={handleTextareaChange}
                         onScroll={handleWriteAreaScroll}
-                        className="w-full border-0 font-cute text-[16px] text-zinc-800 dark:text-zinc-100 focus:ring-0 leading-[36px] resize-none selectable-text pl-8 sm:pl-10 break-words break-all whitespace-pre-wrap outline-none overflow-y-auto lined-notebook-text rounded-xl"
+                        className="w-full border-0 font-cute text-[16px] text-zinc-800 dark:text-zinc-100 focus:ring-0 leading-[36px] resize-none selectable-text break-words break-all whitespace-pre-wrap outline-none overflow-y-auto lined-notebook-text"
                         style={{
                           height: `${PAGE_VIEWPORT_HEIGHT_PX}px`,
                           lineHeight: '36px',
                           wordBreak: 'break-word',
                           overflowWrap: 'anywhere',
                           whiteSpace: 'pre-wrap',
+                          paddingTop: '18px',
+                          paddingBottom: '18px',
+                          paddingLeft: '60px',
+                          paddingRight: '20px',
                         }}
                       />
 
@@ -1654,6 +1661,7 @@ export const DiaryView: React.FC = () => {
         onSaveLog={handleSaveCycleLog}
         onSaveSettings={handleSaveCycleSettings}
         onSendPartnerCareAction={handleSendPartnerCareAction}
+        readOnly={myProfile.gender !== 'female'}
       />
 
       {/* Universal Lightbox Zoom */}
