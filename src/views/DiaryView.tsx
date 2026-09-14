@@ -223,12 +223,35 @@ export const DiaryView: React.FC = () => {
   }, [inlineContent]);
 
   const writeTotalVirtualPages = Math.max(1, Math.ceil(currentLinesCount / MAX_LINES_PER_PAGE));
+  // Last virtual page we already showed the flip effect for — lets the scroll handler tell "typing
+  // just crossed onto a fresh page" (play the flip) apart from "still mid-scroll toward a page we
+  // already announced" (every tick of a smooth scroll fires its own scroll event).
+  const lastFlipPageRef = useRef(1);
+  // Set for the duration of a manual scrollToWritePage() call, which plays its own flip effect —
+  // suppresses a second, redundant one from the scroll events that same programmatic scroll fires.
+  const isManualDraftScrollRef = useRef(false);
 
+  const playDraftPageFlip = (direction: 'next' | 'prev') => {
+    soundService.playPaperOpen();
+    setPageTurnDirection(direction);
+    setIsFlipping(true);
+    setTimeout(() => setIsFlipping(false), 320);
+  };
+
+  // Typing past line 15 auto-scrolls the textarea (native caret-follow) — this just notices that
+  // crossing and plays the same "trang lật" (page turn) feedback the manual buttons use, so filling
+  // a page and moving to the next one is visibly, audibly a page turn, not a silent scroll.
   const handleWriteAreaScroll = () => {
     const ta = textareaRef.current;
     if (!ta) return;
-    const page = Math.floor(ta.scrollTop / PAGE_VIEWPORT_HEIGHT_PX) + 1;
-    setWriteVirtualPage(Math.min(Math.max(1, page), writeTotalVirtualPages));
+    const page = Math.min(Math.max(1, Math.floor(ta.scrollTop / PAGE_VIEWPORT_HEIGHT_PX) + 1), writeTotalVirtualPages);
+    if (page === lastFlipPageRef.current) return;
+    const direction = page > lastFlipPageRef.current ? 'next' : 'prev';
+    lastFlipPageRef.current = page;
+    setWriteVirtualPage(page);
+    if (!isManualDraftScrollRef.current) {
+      playDraftPageFlip(direction);
+    }
   };
 
   // Flip to a specific 1-indexed virtual page within the CURRENT unsaved draft — just scrolls the
@@ -238,9 +261,14 @@ export const DiaryView: React.FC = () => {
     const ta = textareaRef.current;
     const clamped = Math.min(Math.max(1, pageIdx), writeTotalVirtualPages);
     if (!ta || clamped === writeVirtualPage) return;
-    soundService.playPaperOpen();
-    ta.scrollTo({ top: (clamped - 1) * PAGE_VIEWPORT_HEIGHT_PX, behavior: 'smooth' });
+    isManualDraftScrollRef.current = true;
+    playDraftPageFlip(clamped > writeVirtualPage ? 'next' : 'prev');
+    lastFlipPageRef.current = clamped;
     setWriteVirtualPage(clamped);
+    ta.scrollTo({ top: (clamped - 1) * PAGE_VIEWPORT_HEIGHT_PX, behavior: 'smooth' });
+    setTimeout(() => {
+      isManualDraftScrollRef.current = false;
+    }, 400);
   };
 
   const absoluteDiariesOrder = useMemo(() => {
@@ -389,6 +417,7 @@ export const DiaryView: React.FC = () => {
       setInlineTime(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
       setIsFlipping(false);
       isTurningPageRef.current = false;
+      lastFlipPageRef.current = 1;
       setWriteVirtualPage(1);
       setTimeout(() => {
         if (textareaRef.current) textareaRef.current.scrollTop = 0;
@@ -419,6 +448,7 @@ export const DiaryView: React.FC = () => {
     setInlineMood(foundMood);
     const foundWeather = WEATHERS.find((w) => w.emoji === entry.weather) || WEATHERS[0];
     setInlineWeather(foundWeather);
+    lastFlipPageRef.current = 1;
     setWriteVirtualPage(1);
     setTimeout(() => {
       if (textareaRef.current) textareaRef.current.scrollTop = 0;
@@ -1114,6 +1144,24 @@ export const DiaryView: React.FC = () => {
                           whiteSpace: 'pre-wrap',
                         }}
                       />
+
+                      {/* Page Turn Visual Cue — plays whenever writing crosses a 15-line page
+                          boundary (typed past it, or Trang Trước/Sau), a decorative overlay only;
+                          the textarea underneath is never remounted so focus/cursor is untouched. */}
+                      <AnimatePresence>
+                        {isFlipping && pageMode === 'write' && (
+                          <motion.div
+                            initial={{ opacity: 0, rotateY: pageTurnDirection === 'next' ? -25 : 25 }}
+                            animate={{ opacity: [0, 0.9, 0], rotateY: 0 }}
+                            exit={{ opacity: 0 }}
+                            transition={{ duration: 0.32, ease: 'easeInOut' }}
+                            style={{ transformOrigin: pageTurnDirection === 'next' ? 'right center' : 'left center' }}
+                            className="absolute inset-0 rounded-xl bg-gradient-to-br from-white/95 via-rose-50/80 to-white/60 dark:from-zinc-800/95 dark:via-zinc-900/80 dark:to-zinc-800/60 pointer-events-none flex items-center justify-center z-20"
+                          >
+                            <BookOpen className="w-9 h-9 text-rose-400/80" />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
 
                       {/* Draft Page Navigation + Live Capacity Indicator */}
                       <div className="absolute bottom-2 right-4 flex items-center gap-1.5 select-none">
