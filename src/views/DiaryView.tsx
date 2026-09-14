@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Plus,
@@ -15,7 +15,6 @@ import {
   Edit3,
   Save,
   Clock,
-  ArrowRight,
   Bell,
   AlertTriangle,
   User,
@@ -59,9 +58,12 @@ const WEATHERS = [
 
 const QUICK_REACTIONS = ['❤️', '🥰', '🫂', '💋', '💌', '🌸'];
 
-// Strict limit: 16 lines per single notebook page
+// A "page" is now purely a visual/notebook-aesthetic notion — 16 lines is what one physical leaf
+// is themed to hold, shown as a live counter, but writing never hard-splits at this line and never
+// creates a new saved record because of it (see handleSavePage: one diary entry per day).
 const MAX_LINES_PER_PAGE = 16;
-const CHARS_PER_LINE_ESTIMATE = 44;
+const NOTEBOOK_LINE_HEIGHT_PX = 36;
+const MIN_TEXTAREA_HEIGHT_PX = MAX_LINES_PER_PAGE * NOTEBOOK_LINE_HEIGHT_PX;
 
 export const DiaryView: React.FC = () => {
   const {
@@ -181,11 +183,10 @@ export const DiaryView: React.FC = () => {
 
   // Whenever selectedDate changes, reset day page index & mode. Deliberately NOT keyed on
   // selectedDayEntries.length: every addDiary/updateDiary/deleteDiary call on the CURRENT day
-  // already sets dayPageIndex/pageMode explicitly (see handleSavePage, handleTextareaChange,
-  // handleKeyDown), and those entries.length also changes when the partner's own edits sync in.
-  // Re-running this on every such change used to snap dayPageIndex back to 0 and force pageMode
-  // to 'view' right after saving/turning a page — undoing the just-set state and making the page
-  // the user had just written appear to vanish.
+  // already sets dayPageIndex/pageMode explicitly (see handleSavePage), and that length also
+  // changes when the partner's own edits sync in. Re-running this on every such change used to
+  // snap dayPageIndex back to 0 and force pageMode to 'view' right after saving — undoing the
+  // just-set state and making the entry the user had just written appear to vanish.
   useEffect(() => {
     setDayPageIndex(0);
     if (selectedDayEntries.length > 0) {
@@ -202,24 +203,22 @@ export const DiaryView: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
-  // Estimate visual lines taking into account wrapping & newlines
-  const estimateVisualLines = (text?: string) => {
-    if (!text || typeof text !== 'string') return 1;
-    const paragraphs = text.split('\n');
-    let totalLines = 0;
-    for (const p of paragraphs) {
-      if (p.length === 0) {
-        totalLines += 1;
-      } else {
-        totalLines += Math.max(1, Math.ceil(p.length / CHARS_PER_LINE_ESTIMATE));
-      }
-    }
-    return totalLines;
-  };
+  // Live "how full is this page" counter, purely informational. Measured from the actual rendered
+  // textarea (scrollHeight / line-height) instead of a character-count guess — a guess never lines
+  // up with real wrapping (variable glyph widths, Vietnamese diacritics, the textarea's actual
+  // padding/width), which is exactly why the page used to turn early, mid-line. This effect also
+  // auto-grows the textarea to fit its content, since writing no longer hard-caps at one page.
+  const [currentLinesCount, setCurrentLinesCount] = useState(1);
 
-  const currentLinesCount = useMemo(() => {
-    return estimateVisualLines(inlineContent);
-  }, [inlineContent]);
+  useLayoutEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    const measuredHeight = ta.scrollHeight;
+    ta.style.height = `${Math.max(measuredHeight, MIN_TEXTAREA_HEIGHT_PX)}px`;
+    const lineHeightPx = parseFloat(window.getComputedStyle(ta).lineHeight) || NOTEBOOK_LINE_HEIGHT_PX;
+    setCurrentLinesCount(Math.max(1, Math.round(measuredHeight / lineHeightPx)));
+  }, [inlineContent, pageMode]);
 
   const absoluteDiariesOrder = useMemo(() => {
     if (!Array.isArray(diaries)) return [];
@@ -371,129 +370,10 @@ export const DiaryView: React.FC = () => {
     }, 180);
   };
 
-  // Split text when it strictly exceeds page capacity (10 lines)
-  const splitTextToPages = (text: string, maxLines = MAX_LINES_PER_PAGE) => {
-    if (!text) return { currentText: '', overflowText: '', hasOverflow: false };
-    const paragraphs = text.split('\n');
-    const pageParagraphs: string[] = [];
-    const overflowParagraphs: string[] = [];
-    let linesAccum = 0;
-    let isOverflowing = false;
-
-    for (const p of paragraphs) {
-      const pLines = p.length === 0 ? 1 : Math.max(1, Math.ceil(p.length / CHARS_PER_LINE_ESTIMATE));
-      if (!isOverflowing && linesAccum + pLines <= maxLines) {
-        pageParagraphs.push(p);
-        linesAccum += pLines;
-      } else if (!isOverflowing) {
-        const remainingCapacity = maxLines - linesAccum;
-        if (remainingCapacity > 0 && p.length > 0) {
-          const cutIdx = remainingCapacity * CHARS_PER_LINE_ESTIMATE;
-          pageParagraphs.push(p.slice(0, cutIdx));
-          overflowParagraphs.push(p.slice(cutIdx));
-        } else {
-          overflowParagraphs.push(p);
-        }
-        isOverflowing = true;
-      } else {
-        overflowParagraphs.push(p);
-      }
-    }
-
-    return {
-      currentText: pageParagraphs.join('\n'),
-      overflowText: overflowParagraphs.join('\n'),
-      hasOverflow: isOverflowing && overflowParagraphs.join('\n').trim().length > 0,
-    };
-  };
-
-  // Automatic page overflow handler when typing reaches 16 lines
+  // Writing just accumulates in inlineContent — no line-limit splitting, no auto-save. The
+  // textarea grows to fit (see the useLayoutEffect above); "Dòng X/16" is informational only.
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value;
-    const lines = estimateVisualLines(val);
-
-    // If lines strictly exceed MAX_LINES_PER_PAGE, automatically split and turn to the next page!
-    if (lines > MAX_LINES_PER_PAGE && !isTurningPageRef.current) {
-      isTurningPageRef.current = true;
-      const { currentText, overflowText } = splitTextToPages(val, MAX_LINES_PER_PAGE);
-
-      soundService.playPaperOpen();
-      setIsFlipping(true);
-      setPageTurnDirection('next');
-
-      // Auto-save the filled page
-      const newPageNum = selectedDayEntries.length + 1;
-      addDiary({
-        title: inlineTitle.trim() || `Tiêu đề`,
-        content: currentText.trim(),
-        date: selectedDate,
-        time: inlineTime,
-        mood: inlineMood.emoji,
-        moodLabel: inlineMood.label,
-        weather: inlineWeather.emoji,
-        location: inlineLocation.trim() || undefined,
-        photos: inlinePhotos,
-        tags: ['Kỷ niệm'],
-        pageNumber: newPageNum,
-        isPrivate: false,
-      });
-
-      // Prepare next page with the remaining text
-      setTimeout(() => {
-        setInlineTitle(`Tiêu đề`);
-        setInlineContent(overflowText);
-        setInlinePhotos([]);
-        setEditingEntryId(null);
-        setPageMode('write');
-        setIsFlipping(false);
-        isTurningPageRef.current = false;
-        setTimeout(() => textareaRef.current?.focus(), 100);
-      }, 250);
-
-      return;
-    }
-
-    setInlineContent(val);
-  };
-
-  // Keyboard handler: If user hits Enter on last line, turn page automatically!
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && currentLinesCount >= MAX_LINES_PER_PAGE && !isTurningPageRef.current) {
-      isTurningPageRef.current = true;
-      e.preventDefault();
-      soundService.playPaperOpen();
-      setIsFlipping(true);
-      setPageTurnDirection('next');
-
-      // Save current page
-      const newPageNum = selectedDayEntries.length + 1;
-      addDiary({
-        title: inlineTitle.trim() || `Tiêu đề`,
-        content: inlineContent.trim(),
-        date: selectedDate,
-        time: inlineTime,
-        mood: inlineMood.emoji,
-        moodLabel: inlineMood.label,
-        weather: inlineWeather.emoji,
-        location: inlineLocation.trim() || undefined,
-        photos: inlinePhotos,
-        tags: ['Kỷ niệm'],
-        pageNumber: newPageNum,
-        isPrivate: false,
-      });
-
-      // Advance to next page
-      setTimeout(() => {
-        setInlineTitle(`Tiêu đề`);
-        setInlineContent('');
-        setInlinePhotos([]);
-        setEditingEntryId(null);
-        setPageMode('write');
-        setIsFlipping(false);
-        isTurningPageRef.current = false;
-        setTimeout(() => textareaRef.current?.focus(), 100);
-      }, 250);
-    }
+    setInlineContent(e.target.value);
   };
 
   // Start editing existing page
@@ -549,8 +429,13 @@ export const DiaryView: React.FC = () => {
 
     soundService.playSparkle();
 
-    if (editingEntryId) {
-      updateDiary(editingEntryId, {
+    // A day now holds at most one diary record — "pages" are just how that one record's writing
+    // is themed/displayed. If this day already has an entry (even if the user got here without
+    // explicitly clicking "Sửa trang"), saving updates that SAME entry instead of adding another.
+    const targetEntryId = editingEntryId || selectedDayEntries[selectedDayEntries.length - 1]?.id;
+
+    if (targetEntryId) {
+      updateDiary(targetEntryId, {
         title: inlineTitle.trim() || `Tiêu đề`,
         content: inlineContent.trim(),
         date: selectedDate,
@@ -564,9 +449,9 @@ export const DiaryView: React.FC = () => {
         isPrivate: false,
       });
       setEditingEntryId(null);
+      setDayPageIndex(Math.max(0, selectedDayEntries.length - 1));
       setPageMode('view');
     } else {
-      const newPageNum = selectedDayEntries.length + 1;
       addDiary({
         title: inlineTitle.trim() || `Tiêu đề`,
         content: inlineContent.trim(),
@@ -578,10 +463,10 @@ export const DiaryView: React.FC = () => {
         location: inlineLocation.trim() || undefined,
         photos: inlinePhotos,
         tags: ['Kỷ niệm'],
-        pageNumber: newPageNum,
+        pageNumber: 1,
         isPrivate: false,
       });
-      setDayPageIndex(selectedDayEntries.length);
+      setDayPageIndex(0);
       setPageMode('view');
     }
 
@@ -596,6 +481,7 @@ export const DiaryView: React.FC = () => {
     soundService.playPop();
     const titleToDelete = entryToDelete.title || 'Trang nhật ký';
     const dateFormatted = formatDisplayDate(entryToDelete.date);
+    const wasLastEntryOfDay = selectedDayEntries.length <= 1;
 
     deleteDiary(entryToDelete.id);
 
@@ -607,8 +493,17 @@ export const DiaryView: React.FC = () => {
 
     setEntryToDelete(null);
 
-    // Adjust page index smoothly
-    if (dayPageIndex > 0) {
+    if (wasLastEntryOfDay) {
+      // Nothing left to view for this day — go back to a blank writer instead of relying on the
+      // day-change effect (which only fires on an actual date change now, see its comment).
+      setDayPageIndex(0);
+      setPageMode('write');
+      setEditingEntryId(null);
+      setInlineTitle('');
+      setInlineContent('');
+      setInlinePhotos([]);
+      setInlineLocation('');
+    } else if (dayPageIndex > 0) {
       setDayPageIndex((prev) => prev - 1);
     }
   };
@@ -733,11 +628,20 @@ export const DiaryView: React.FC = () => {
           )}
 
           <button
-            onClick={handleAddNewPageForThisDay}
+            onClick={() => {
+              // One entry per day: if today already has one, keep writing into it instead of
+              // starting a separate blank page.
+              const existing = selectedDayEntries[selectedDayEntries.length - 1];
+              if (existing) {
+                handleStartEditPage(existing);
+              } else {
+                handleAddNewPageForThisDay();
+              }
+            }}
             className="w-full md:w-auto px-6 py-2.5 rounded-full bg-gradient-to-r from-[#FF758F] to-[#FF9A9E] hover:from-[#ff607e] hover:to-[#ff8d92] text-white font-bold text-xs sm:text-sm shadow-md shadow-rose-200 dark:shadow-rose-950 flex items-center justify-center gap-2 transition active:scale-95 cursor-pointer"
           >
             <Plus className="w-4 h-4 stroke-[3px]" />
-            <span>Thêm Trang Mới Cho Ngày Này ✍️</span>
+            <span>{selectedDayEntries.length > 0 ? 'Viết Tiếp Nhật Ký Hôm Nay ✍️' : 'Thêm Trang Mới Cho Ngày Này ✍️'}</span>
           </button>
         </div>
       </div>
@@ -1152,20 +1056,19 @@ export const DiaryView: React.FC = () => {
                       />
                     </div>
 
-                    {/* Synchronized Ruled Notebook Lines (20 Lines Limit) */}
-                    <div className="relative rounded-2xl p-4 sm:p-5 lined-notebook-text border border-[#ecdac8] dark:border-zinc-800 shadow-inner min-h-[500px] sm:min-h-[600px] overflow-hidden">
+                    {/* Ruled Notebook Lines — grows to fit whatever is written; the 16-line mark
+                        is a visual guide only, writing never gets cut off or split by it. */}
+                    <div className="relative rounded-2xl p-4 sm:p-5 lined-notebook-text border border-[#ecdac8] dark:border-zinc-800 shadow-inner min-h-[500px] sm:min-h-[600px]">
                       <textarea
                         ref={textareaRef}
-                        rows={20}
+                        rows={16}
                         required
                         placeholder="Viết tâm tình của bạn tại đây... Từng chữ sẽ nằm ngay ngắn trên từng dòng kẻ ✍️"
                         value={inlineContent}
                         onChange={handleTextareaChange}
-                        onKeyDown={handleKeyDown}
                         className="w-full bg-transparent border-0 font-cute text-[16px] text-zinc-800 dark:text-zinc-100 focus:ring-0 leading-[36px] resize-none selectable-text pl-8 sm:pl-10 break-words break-all whitespace-pre-wrap outline-none overflow-hidden"
                         style={{
                           lineHeight: '36px',
-                          minHeight: '360px',
                           wordBreak: 'break-word',
                           overflowWrap: 'anywhere',
                           whiteSpace: 'pre-wrap',
@@ -1298,42 +1201,7 @@ export const DiaryView: React.FC = () => {
                       </div>
 
                       {/* Action Buttons */}
-                      <div className="flex items-center justify-between gap-3 pt-1">
-                        <button
-                          type="button"
-                          disabled={isFlipping}
-                          onClick={() => {
-                            // Bail if an auto page-turn (overflow typing / Enter at line limit) is
-                            // already mid-flight — otherwise this fires with the still-stale
-                            // inlineContent (pre-split) and creates a duplicate of the page that
-                            // auto-turn is in the middle of saving. handleAddNewPageForThisDay
-                            // below holds the same guard for its own async duration.
-                            if (isTurningPageRef.current) return;
-                            if (inlineContent.trim()) {
-                              const newPageNum = selectedDayEntries.length + 1;
-                              addDiary({
-                                title: inlineTitle.trim() || `Trang ${newPageNum}`,
-                                content: inlineContent.trim(),
-                                date: selectedDate,
-                                time: inlineTime,
-                                mood: inlineMood.emoji,
-                                moodLabel: inlineMood.label,
-                                weather: inlineWeather.emoji,
-                                location: inlineLocation.trim() || undefined,
-                                photos: inlinePhotos,
-                                tags: ['Kỷ niệm'],
-                                pageNumber: newPageNum,
-                                isPrivate: false,
-                              });
-                            }
-                            handleAddNewPageForThisDay();
-                          }}
-                          className="px-4 py-2 rounded-2xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-bold text-xs hover:bg-zinc-200 transition flex items-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <span>Sang trang mới (Tách trang)</span>
-                          <ArrowRight className="w-3.5 h-3.5" />
-                        </button>
-
+                      <div className="flex items-center justify-end gap-3 pt-1">
                         <div className="flex items-center gap-2">
                           {editingEntryId && (
                             <button
