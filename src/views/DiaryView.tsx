@@ -179,7 +179,13 @@ export const DiaryView: React.FC = () => {
   // Current page entry of the day
   const currentDayEntry: DiaryEntry | undefined = selectedDayEntries[dayPageIndex];
 
-  // Whenever selectedDate changes, reset day page index & mode
+  // Whenever selectedDate changes, reset day page index & mode. Deliberately NOT keyed on
+  // selectedDayEntries.length: every addDiary/updateDiary/deleteDiary call on the CURRENT day
+  // already sets dayPageIndex/pageMode explicitly (see handleSavePage, handleTextareaChange,
+  // handleKeyDown), and those entries.length also changes when the partner's own edits sync in.
+  // Re-running this on every such change used to snap dayPageIndex back to 0 and force pageMode
+  // to 'view' right after saving/turning a page — undoing the just-set state and making the page
+  // the user had just written appear to vanish.
   useEffect(() => {
     setDayPageIndex(0);
     if (selectedDayEntries.length > 0) {
@@ -193,7 +199,8 @@ export const DiaryView: React.FC = () => {
       setInlinePhotos([]);
       setInlineLocation('');
     }
-  }, [selectedDate, selectedDayEntries.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate]);
 
   // Estimate visual lines taking into account wrapping & newlines
   const estimateVisualLines = (text?: string) => {
@@ -340,8 +347,12 @@ export const DiaryView: React.FC = () => {
     }
   };
 
-  // Add a new page to the CURRENT DAY manually
+  // Add a new page to the CURRENT DAY manually. Holds isTurningPageRef for its whole (async)
+  // duration so a stray double-click, or overlap with an in-flight auto page-turn, can't fire a
+  // second addDiary against the same still-stale inlineContent and create a duplicate page.
   const handleAddNewPageForThisDay = () => {
+    if (isTurningPageRef.current) return;
+    isTurningPageRef.current = true;
     soundService.playPaperOpen();
     setIsFlipping(true);
     setPageTurnDirection('next');
@@ -355,6 +366,7 @@ export const DiaryView: React.FC = () => {
       const d = new Date();
       setInlineTime(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
       setIsFlipping(false);
+      isTurningPageRef.current = false;
       setTimeout(() => textareaRef.current?.focus(), 100);
     }, 180);
   };
@@ -530,6 +542,10 @@ export const DiaryView: React.FC = () => {
       alert('Vui lòng nhập nội dung trang nhật ký');
       return;
     }
+    // An auto page-turn (overflow typing / Enter at line limit) may still be mid-flight — its own
+    // addDiary call already used this same inlineContent, so saving again here right now would
+    // duplicate it.
+    if (isTurningPageRef.current) return;
 
     soundService.playSparkle();
 
@@ -1285,7 +1301,14 @@ export const DiaryView: React.FC = () => {
                       <div className="flex items-center justify-between gap-3 pt-1">
                         <button
                           type="button"
+                          disabled={isFlipping}
                           onClick={() => {
+                            // Bail if an auto page-turn (overflow typing / Enter at line limit) is
+                            // already mid-flight — otherwise this fires with the still-stale
+                            // inlineContent (pre-split) and creates a duplicate of the page that
+                            // auto-turn is in the middle of saving. handleAddNewPageForThisDay
+                            // below holds the same guard for its own async duration.
+                            if (isTurningPageRef.current) return;
                             if (inlineContent.trim()) {
                               const newPageNum = selectedDayEntries.length + 1;
                               addDiary({
@@ -1305,7 +1328,7 @@ export const DiaryView: React.FC = () => {
                             }
                             handleAddNewPageForThisDay();
                           }}
-                          className="px-4 py-2 rounded-2xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-bold text-xs hover:bg-zinc-200 transition flex items-center gap-1 cursor-pointer"
+                          className="px-4 py-2 rounded-2xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-bold text-xs hover:bg-zinc-200 transition flex items-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <span>Sang trang mới (Tách trang)</span>
                           <ArrowRight className="w-3.5 h-3.5" />
@@ -1326,7 +1349,8 @@ export const DiaryView: React.FC = () => {
                           )}
                           <button
                             type="submit"
-                            className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white font-bold text-xs sm:text-sm shadow-md shadow-rose-300 dark:shadow-rose-950 flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer"
+                            disabled={isFlipping}
+                            className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white font-bold text-xs sm:text-sm shadow-md shadow-rose-300 dark:shadow-rose-950 flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <Save className="w-4 h-4" />
                             <span>{editingEntryId ? 'Lưu Cập Nhật' : 'Lưu Trang Này 💖'}</span>
