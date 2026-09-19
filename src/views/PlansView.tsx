@@ -18,11 +18,12 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useCouple } from '../context/CoupleContext';
-import { TripPlan, PlanStop } from '../types';
+import { TripPlan, PlanStop, PlanBlock } from '../types';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { formatDateVN } from '../utils/date';
 import { DateInputVN } from '../components/DateInputVN';
+import { PlanBlocksEditor, escapeToHtml } from '../components/PlanBlocks';
 
 const KINDS: { id: TripPlan['kind']; label: string; emoji: string }[] = [
   { id: 'trip', label: 'Du lịch', emoji: '✈️' },
@@ -359,7 +360,7 @@ const ModalShell: React.FC<{ onClose: () => void; children: React.ReactNode; wid
       exit={{ y: 60, opacity: 0 }}
       transition={{ type: 'spring', damping: 26, stiffness: 300 }}
       onClick={(e) => e.stopPropagation()}
-      className={`relative w-full ${wide ? 'sm:max-w-2xl' : 'sm:max-w-lg'} max-h-[92vh] overflow-y-auto bg-white dark:bg-zinc-900 rounded-t-[32px] sm:rounded-[32px] shadow-2xl border border-rose-100 dark:border-zinc-800`}
+      className={`relative w-full ${wide ? 'sm:max-w-3xl' : 'sm:max-w-lg'} max-h-[92vh] overflow-y-auto bg-white dark:bg-zinc-900 rounded-t-[32px] sm:rounded-[32px] shadow-2xl border border-rose-100 dark:border-zinc-800`}
     >
       {children}
     </motion.div>
@@ -495,7 +496,7 @@ const CreatePlanModal: React.FC<{
 /* Detail modal                                                        */
 /* ------------------------------------------------------------------ */
 
-type DetailTab = 'itinerary' | 'checklist' | 'budget' | 'notes';
+type DetailTab = 'itinerary' | 'content' | 'checklist' | 'budget';
 
 const PlanDetailModal: React.FC<{
   plan: TripPlan;
@@ -510,9 +511,9 @@ const PlanDetailModal: React.FC<{
 
   const tabs: { id: DetailTab; label: string; icon: React.ReactNode }[] = [
     { id: 'itinerary', label: 'Lịch trình', icon: <Route className="w-4 h-4" /> },
+    { id: 'content', label: 'Nội dung', icon: <NotebookPen className="w-4 h-4" /> },
     { id: 'checklist', label: 'Chuẩn bị', icon: <ListChecks className="w-4 h-4" /> },
     { id: 'budget', label: 'Ngân sách', icon: <Wallet className="w-4 h-4" /> },
-    { id: 'notes', label: 'Ghi chú', icon: <NotebookPen className="w-4 h-4" /> },
   ];
 
   const setStatus = (s: TripPlan['status']) => {
@@ -597,7 +598,7 @@ const PlanDetailModal: React.FC<{
         {tab === 'itinerary' && <ItineraryTab plan={plan} duration={duration} onUpdate={onUpdate} />}
         {tab === 'checklist' && <ChecklistTab plan={plan} onUpdate={onUpdate} />}
         {tab === 'budget' && <BudgetTab plan={plan} onUpdate={onUpdate} />}
-        {tab === 'notes' && <NotesTab plan={plan} onUpdate={onUpdate} />}
+        {tab === 'content' && <ContentTab plan={plan} onUpdate={onUpdate} />}
       </div>
 
       <div className="px-5 pb-5 flex items-center justify-between text-[11px] text-zinc-400">
@@ -848,20 +849,9 @@ const BudgetTab: React.FC<{ plan: TripPlan; onUpdate: (u: Partial<TripPlan>) => 
   );
 };
 
-const NotesTab: React.FC<{ plan: TripPlan; onUpdate: (u: Partial<TripPlan>) => void }> = ({ plan, onUpdate }) => {
-  const [notes, setNotes] = useState(plan.notes || '');
-  return (
-    <div>
-      <label className={labelCls}>Ghi chú chung</label>
-      <textarea
-        value={notes}
-        onChange={(e) => setNotes(e.target.value)}
-        onBlur={() => notes !== (plan.notes || '') && onUpdate({ notes })}
-        rows={9}
-        placeholder="Quán muốn thử, số điện thoại homestay, những điều bất ngờ dành cho nhau..."
-        className={`${inputCls} resize-none leading-relaxed font-normal`}
-      />
-      <p className="text-[11px] text-zinc-400 mt-1.5">Tự động lưu khi bạn bấm ra ngoài ô.</p>
-    </div>
-  );
+const ContentTab: React.FC<{ plan: TripPlan; onUpdate: (u: Partial<TripPlan>) => void }> = ({ plan, onUpdate }) => {
+  // Plans made before the block editor only have plain-text notes: show them as a first text block.
+  const blocks: PlanBlock[] =
+    plan.blocks ?? (plan.notes?.trim() ? [{ id: 'legacy_notes', type: 'text', html: escapeToHtml(plan.notes) }] : []);
+  return <PlanBlocksEditor blocks={blocks} onChange={(next) => onUpdate({ blocks: next })} />;
 };

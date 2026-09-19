@@ -229,6 +229,21 @@ export interface PlanChecklistItem {
   done: boolean;
 }
 
+export interface PlanOption {
+  id: string;
+  name: string;
+  place?: string;
+  price?: number; // VND
+  note?: string;
+}
+
+export type PlanBlock =
+  | { id: string; type: 'heading'; text: string }
+  | { id: string; type: 'text'; html: string }
+  | { id: string; type: 'checklist'; title: string; items: PlanChecklistItem[] }
+  | { id: string; type: 'table'; title: string; rows: string[][] } // rows[0] is the header row
+  | { id: string; type: 'options'; title: string; options: PlanOption[]; chosenId?: string };
+
 export interface TripPlan {
   id: string;
   title: string;
@@ -240,7 +255,8 @@ export interface TripPlan {
   budget?: number; // VND
   status: 'dreaming' | 'planned' | 'done';
   coverIndex: number;
-  notes?: string;
+  notes?: string; // legacy plain-text notes (migrated into a text block on first edit)
+  blocks?: PlanBlock[]; // free-form content: headings, rich text, checkbox lists, tables, option comparisons
   stops: PlanStop[];
   checklist: PlanChecklistItem[];
   authorId: string;
