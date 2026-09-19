@@ -220,6 +220,9 @@ export interface PlanStop {
   title: string;
   place?: string;
   cost?: number; // VND
+  lat?: number;
+  lng?: number;
+  reviewUrl?: string;
   done: boolean;
 }
 
@@ -235,6 +238,9 @@ export interface PlanOption {
   place?: string;
   price?: number; // VND
   note?: string;
+  lat?: number;
+  lng?: number;
+  reviewUrl?: string;
 }
 
 export type PlanBlock =

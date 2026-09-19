@@ -24,6 +24,8 @@ import { soundService } from '../services/sound';
 import { formatDateVN } from '../utils/date';
 import { DateInputVN } from '../components/DateInputVN';
 import { PlanBlocksEditor, escapeToHtml } from '../components/PlanBlocks';
+import { PlaceActions, PlacePickButton } from '../components/PlaceTools';
+import { safeUrl } from '../utils/maps';
 
 const KINDS: { id: TripPlan['kind']; label: string; emoji: string }[] = [
   { id: 'trip', label: 'Du lịch', emoji: '✈️' },
@@ -616,6 +618,8 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
   const [time, setTime] = useState('');
   const [title, setTitle] = useState('');
   const [place, setPlace] = useState('');
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [reviewUrl, setReviewUrl] = useState('');
   const [cost, setCost] = useState('');
 
   const days = Array.from({ length: Math.max(duration, ...plan.stops.map((s) => s.day), 1) }, (_, i) => i + 1);
@@ -630,11 +634,16 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
       title: title.trim(),
       place: place.trim() || undefined,
       cost: parseMoney(cost),
+      lat: coords?.lat,
+      lng: coords?.lng,
+      reviewUrl: safeUrl(reviewUrl) || undefined,
       done: false,
     };
     onUpdate({ stops: [...plan.stops, stop] });
     setTitle('');
     setPlace('');
+    setCoords(null);
+    setReviewUrl('');
     setCost('');
     setTime('');
     soundService.playPop();
@@ -696,6 +705,7 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
                               </span>
                             ) : null}
                           </div>
+                          <PlaceActions place={{ name: s.place, lat: s.lat, lng: s.lng, reviewUrl: s.reviewUrl }} className="mt-1.5" />
                         </div>
                         <button onClick={() => removeStop(s.id)} className="p-1 rounded-lg text-zinc-300 hover:text-red-500 transition" aria-label="Xóa hoạt động">
                           <Trash2 className="w-3.5 h-3.5" />
@@ -726,6 +736,18 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Làm gì? (ăn tối, ngắm hoàng hôn...)" className={inputCls} />
         <div className="flex gap-2">
           <input value={place} onChange={(e) => setPlace(e.target.value)} placeholder="Địa điểm (không bắt buộc)" className={inputCls} />
+          <PlacePickButton
+            lat={coords?.lat}
+            lng={coords?.lng}
+            query={place}
+            onPick={(p) => {
+              setCoords({ lat: p.lat, lng: p.lng });
+              if (!place.trim() && p.address) setPlace(p.address.split(',').slice(0, 2).join(',').trim());
+            }}
+          />
+        </div>
+        <div className="flex gap-2">
+          <input value={reviewUrl} onChange={(e) => setReviewUrl(e.target.value)} placeholder="Link review quán (Google Maps, Foody, TikTok...)" inputMode="url" className={inputCls} />
           <button type="submit" disabled={!title.trim()} className="px-4 rounded-xl bg-rose-500 hover:bg-rose-600 disabled:opacity-40 text-white font-bold text-sm transition whitespace-nowrap">
             Thêm
           </button>

@@ -25,6 +25,8 @@ import {
 import { PlanBlock, PlanOption } from '../types';
 import { colName, displayValue, evaluateSheet, isErrorValue, parseNumber } from '../utils/sheet';
 import { soundService } from '../services/sound';
+import { PlaceActions, PlacePickButton } from './PlaceTools';
+import { safeUrl } from '../utils/maps';
 
 const newId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 const formatVND = (n: number) => `${Math.round(n).toLocaleString('vi-VN')}đ`;
@@ -436,6 +438,21 @@ const OptionsBlock: React.FC<{
                 <MapPin className="w-3 h-3 shrink-0" />
                 <CommitInput value={o.place || ''} onCommit={(place) => patch(o.id, { place })} placeholder="Địa điểm" className="flex-1 min-w-0 bg-transparent border-0 p-0 text-xs focus:ring-0" />
               </div>
+              <PlacePickButton
+                lat={o.lat}
+                lng={o.lng}
+                query={o.place || o.name}
+                className="w-full !py-1.5"
+                onPick={(p) => patch(o.id, { lat: p.lat, lng: p.lng, place: o.place || (p.address ? p.address.split(',').slice(0, 2).join(',').trim() : undefined) })}
+              />
+              <CommitInput
+                value={o.reviewUrl || ''}
+                inputMode="url"
+                onCommit={(v) => patch(o.id, { reviewUrl: v.trim() ? safeUrl(v) || undefined : undefined })}
+                placeholder="Link review quán"
+                className={`${fieldCls} !py-1.5 text-xs`}
+              />
+              <PlaceActions place={{ name: o.place, lat: o.lat, lng: o.lng, reviewUrl: o.reviewUrl }} />
               <CommitInput
                 value={o.price ? String(o.price) : ''}
                 inputMode="numeric"
