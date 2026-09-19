@@ -1,10 +1,10 @@
 import React from 'react';
-import { BookHeart, Image as ImageIcon, Mail, Hourglass, Settings } from 'lucide-react';
+import { BookHeart, Image as ImageIcon, Mail, Hourglass, Settings, Plane } from 'lucide-react';
 import { useCouple } from '../context/CoupleContext';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 
-export type TabType = 'diary' | 'photos' | 'cards' | 'anniversary' | 'settings';
+export type TabType = 'diary' | 'photos' | 'cards' | 'anniversary' | 'plans' | 'settings';
 
 interface NavbarProps {
   activeTab: TabType;
@@ -29,6 +29,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
       badge: unreadCardsCount > 0 ? unreadCardsCount : undefined,
     },
     { id: 'anniversary' as TabType, label: 'Kỷ Niệm', icon: Hourglass, emoji: '⏳' },
+    { id: 'plans' as TabType, label: 'Đi Chơi', icon: Plane, emoji: '✈️' },
     { id: 'settings' as TabType, label: 'Ghép Đôi', icon: Settings, emoji: '⚙️' },
   ];
 
@@ -49,7 +50,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
               <button
                 key={item.id}
                 onClick={() => handleTabClick(item.id)}
-                className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-full font-bold text-xs sm:text-sm transition-all duration-300 relative cursor-pointer ${
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-full font-bold text-xs sm:text-sm transition-all duration-300 relative cursor-pointer ${
                   isActive
                     ? `${currentTheme.activeTab} scale-102`
                     : 'text-zinc-600 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10'
@@ -80,7 +81,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
             <button
               key={item.id}
               onClick={() => handleTabClick(item.id)}
-              className={`flex flex-col items-center justify-center gap-1 px-3 py-1 rounded-2xl transition relative cursor-pointer ${
+              className={`flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-2xl transition relative cursor-pointer ${
                 isActive ? 'font-bold scale-105' : 'text-zinc-500 dark:text-zinc-400 font-medium'
               }`}
               style={{ color: isActive ? currentTheme.primaryColor : undefined }}

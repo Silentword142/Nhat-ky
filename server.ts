@@ -114,6 +114,7 @@ export interface CoupleRoomState {
   photos: any[];
   cards: any[];
   anniversaries: any[];
+  plans?: any[];
   playlist?: any[];
   albums?: any[];
   settings?: any;
@@ -1033,6 +1034,13 @@ app.post('/api/room/:roomCode/sync', (req, res) => {
         currentRoom.anniversaries = mergeCollection(currentRoom.anniversaries || [], state.anniversaries, deletedSet);
       } else if (currentRoom.anniversaries) {
         currentRoom.anniversaries = currentRoom.anniversaries.filter((a: any) => !deletedSet.has(a.id));
+      }
+
+      // Merge trip/date plans safely
+      if (state && Array.isArray(state.plans)) {
+        currentRoom.plans = mergeCollection(currentRoom.plans || [], state.plans, deletedSet);
+      } else if (currentRoom.plans) {
+        currentRoom.plans = currentRoom.plans.filter((p: any) => !deletedSet.has(p.id));
       }
     }
 

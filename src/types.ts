@@ -193,6 +193,8 @@ export interface HandwrittenCard {
   sealStyle: 'rose_wax' | 'golden_heart' | 'ribbon' | 'cupid' | 'kiss';
   sealColor: string;
   messageText?: string;
+  fontId?: string; // text-first card: handwriting font used for messageText
+  layout?: 'stage'; // text-first card: drawing (cardDataUrl) is a transparent overlay on the text page
   isOpened: boolean;
   openedAt?: number;
   sentAt: number;
@@ -209,6 +211,42 @@ export interface AnniversaryEvent {
   coverImage?: string;
   isMilestone?: boolean;
   targetDays?: number;
+}
+
+export interface PlanStop {
+  id: string;
+  day: number; // 1-based day index within the plan
+  time?: string; // HH:mm
+  title: string;
+  place?: string;
+  cost?: number; // VND
+  done: boolean;
+}
+
+export interface PlanChecklistItem {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
+export interface TripPlan {
+  id: string;
+  title: string;
+  kind: 'trip' | 'date' | 'picnic' | 'staycation' | 'other';
+  emoji: string;
+  destination: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  budget?: number; // VND
+  status: 'dreaming' | 'planned' | 'done';
+  coverIndex: number;
+  notes?: string;
+  stops: PlanStop[];
+  checklist: PlanChecklistItem[];
+  authorId: string;
+  authorName: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface HeartbeatPulse {
@@ -237,6 +275,7 @@ export interface CoupleFullState {
   photos: PhotoMemory[];
   cards: HandwrittenCard[];
   anniversaries: AnniversaryEvent[];
+  plans?: TripPlan[];
   playlist?: MusicTrack[];
   albums?: Album[];
 }

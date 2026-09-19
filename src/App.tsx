@@ -11,6 +11,7 @@ import { DiaryView } from './views/DiaryView';
 import { PhotoAlbumView } from './views/PhotoAlbumView';
 import { HandwrittenCardView } from './views/HandwrittenCardView';
 import { AnniversaryView } from './views/AnniversaryView';
+import { PlansView } from './views/PlansView';
 import { SettingsView } from './views/SettingsView';
 import { THEMES } from './utils/theme';
 import { soundService } from './services/sound';
@@ -97,6 +98,7 @@ const MainAppContent: React.FC = () => {
               {activeTab === 'photos' && <PhotoAlbumView />}
               {activeTab === 'cards' && <HandwrittenCardView />}
               {activeTab === 'anniversary' && <AnniversaryView />}
+              {activeTab === 'plans' && <PlansView />}
               {activeTab === 'settings' && <SettingsView />}
             </motion.div>
           </AnimatePresence>

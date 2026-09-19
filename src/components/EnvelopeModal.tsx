@@ -6,6 +6,7 @@ import { HandwrittenCard } from '../types';
 import { useCouple } from '../context/CoupleContext';
 import { soundService } from '../services/sound';
 import { ImageLightbox } from './ImageLightbox';
+import { CardPage } from './CardPage';
 import { formatDateTimeVN } from '../utils/date';
 
 interface EnvelopeModalProps {
@@ -42,6 +43,9 @@ export const EnvelopeModal: React.FC<EnvelopeModalProps> = ({ card, onClose }) =
       openCard(card.id);
     }
   };
+
+  // Text-first cards render the message as the page and the drawing as an overlay on it.
+  const isStageCard = card.layout === 'stage';
 
   const showLetterContent = isAlreadyOpened || isSender || isOpenAnimationStarted;
 
@@ -130,7 +134,7 @@ export const EnvelopeModal: React.FC<EnvelopeModalProps> = ({ card, onClose }) =
                   </div>
                 </div>
 
-                {card.cardDataUrl && (
+                {card.cardDataUrl && !isStageCard && (
                   <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => setIsZoomOpen(true)}
@@ -153,8 +157,14 @@ export const EnvelopeModal: React.FC<EnvelopeModalProps> = ({ card, onClose }) =
                 )}
               </div>
 
-              {/* Render canvas drawn image if exists */}
-              {card.cardDataUrl ? (
+              {isStageCard && (
+                <div className="mx-auto w-full max-w-[460px] mb-4 rounded-2xl shadow-lg">
+                  <CardPage paperId={card.paperTemplate} text={card.messageText} fontId={card.fontId} overlaySrc={card.cardDataUrl || undefined} />
+                </div>
+              )}
+
+              {/* Legacy cards: drawing shown as an image, text below */}
+              {!isStageCard && card.cardDataUrl ? (
                 <div
                   onClick={() => setIsZoomOpen(true)}
                   className="group relative rounded-2xl overflow-hidden shadow-inner border border-zinc-200/80 dark:border-zinc-800 mb-4 bg-white dark:bg-zinc-900 cursor-pointer"
@@ -174,7 +184,7 @@ export const EnvelopeModal: React.FC<EnvelopeModalProps> = ({ card, onClose }) =
               ) : null}
 
               {/* Render handwritten message text if any */}
-              {card.messageText && (
+              {!isStageCard && card.messageText && (
                 <div className="paper-lined rounded-2xl p-5 sm:p-6 border border-[#eedcca] dark:border-[#382d3b] text-base sm:text-lg font-handwriting leading-relaxed text-zinc-800 dark:text-zinc-100 whitespace-pre-line shadow-sm mb-4">
                   {card.messageText}
                 </div>
@@ -191,7 +201,7 @@ export const EnvelopeModal: React.FC<EnvelopeModalProps> = ({ card, onClose }) =
         </motion.div>
       </div>
 
-      {card.cardDataUrl && (
+      {card.cardDataUrl && !isStageCard && (
         <ImageLightbox
           images={[
             {
