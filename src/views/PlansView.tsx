@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Plus,
@@ -28,6 +28,9 @@ import { PlanBlocksEditor, escapeToHtml } from '../components/PlanBlocks';
 import { PlaceActions, PlacePickButton } from '../components/PlaceTools';
 import { safeUrl } from '../utils/maps';
 import { evaluateSheet, parseNumber } from '../utils/sheet';
+
+// Leaflet is only downloaded when the itinerary map is actually shown.
+const PlanDayMap = React.lazy(() => import('../components/PlanDayMap'));
 
 const KINDS: { id: TripPlan['kind']; label: string; emoji: string }[] = [
   { id: 'trip', label: 'Du lịch', emoji: '✈️' },
@@ -351,7 +354,7 @@ const inputCls =
   'w-full px-3.5 py-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 border-0 text-sm font-semibold text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-rose-400 placeholder:font-normal placeholder:text-zinc-400';
 const labelCls = 'block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1';
 
-const ModalShell: React.FC<{ onClose: () => void; children: React.ReactNode; wide?: boolean }> = ({ onClose, children, wide }) => (
+const ModalShell: React.FC<{ onClose: () => void; children: React.ReactNode; wide?: boolean; maxW?: string }> = ({ onClose, children, wide, maxW }) => (
   <motion.div
     initial={{ opacity: 0 }}
     animate={{ opacity: 1 }}
@@ -365,7 +368,7 @@ const ModalShell: React.FC<{ onClose: () => void; children: React.ReactNode; wid
       exit={{ y: 60, opacity: 0 }}
       transition={{ type: 'spring', damping: 26, stiffness: 300 }}
       onClick={(e) => e.stopPropagation()}
-      className={`relative w-full ${wide ? 'sm:max-w-3xl' : 'sm:max-w-lg'} max-h-[92vh] overflow-y-auto bg-white dark:bg-zinc-900 rounded-t-[32px] sm:rounded-[32px] shadow-2xl border border-rose-100 dark:border-zinc-800`}
+      className={`relative w-full ${maxW || (wide ? 'sm:max-w-3xl' : 'sm:max-w-lg')} max-h-[92vh] overflow-y-auto bg-white dark:bg-zinc-900 rounded-t-[32px] sm:rounded-[32px] shadow-2xl border border-rose-100 dark:border-zinc-800`}
     >
       {children}
     </motion.div>
@@ -532,7 +535,7 @@ const PlanDetailModal: React.FC<{
   };
 
   return (
-    <ModalShell onClose={onClose} wide>
+    <ModalShell onClose={onClose} wide maxW={tab === 'itinerary' ? 'sm:max-w-6xl' : 'sm:max-w-3xl'}>
       <div className={`relative bg-gradient-to-br ${COVERS[plan.coverIndex % COVERS.length]} p-5 pb-6 text-white`}>
         <button onClick={onClose} className="absolute top-3 right-3 p-2 rounded-full bg-white/25 hover:bg-white/40 transition">
           <X className="w-4 h-4" />
@@ -706,6 +709,7 @@ const StopForm: React.FC<{
 const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: Partial<TripPlan>) => void }> = ({ plan, duration, onUpdate }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [lastDay, setLastDay] = useState(1);
+  const [mapDay, setMapDay] = useState(1);
 
   const days = Array.from({ length: Math.max(duration, ...plan.stops.map((s) => s.day), 1) }, (_, i) => i + 1);
 
@@ -723,6 +727,7 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
     const stop: PlanStop = { id: newId('stop'), done: false, ...draftToFields(d) };
     onUpdate({ stops: [...plan.stops, stop] });
     setLastDay(d.day);
+    setMapDay(d.day);
     soundService.playPop();
   };
 
@@ -742,24 +747,53 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
     return formatDateVN(new Date(t + (d - 1) * dayMs));
   };
 
+  // Visiting order (by time) — the same order and numbering the map uses.
+  const stopsOfDay = (d: number) =>
+    plan.stops.filter((s) => s.day === d).sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
+
+  const activeMapDay = days.includes(mapDay) ? mapDay : days[0];
+
   return (
-    <div className="space-y-5">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+      {/* Map: first on phones, sticky on the right on desktop */}
+      <div className="order-first lg:order-last lg:sticky lg:top-14">
+        <Suspense
+          fallback={<div className="h-64 rounded-2xl bg-zinc-50 dark:bg-zinc-800 flex items-center justify-center text-sm text-zinc-400">Đang tải bản đồ...</div>}
+        >
+          <PlanDayMap
+            stops={stopsOfDay(activeMapDay)}
+            days={days}
+            day={activeMapDay}
+            dateLabel={dateOfDay(activeMapDay)}
+            destination={plan.destination}
+            onDayChange={setMapDay}
+            onPinStop={(id, c) => onUpdate({ stops: plan.stops.map((s) => (s.id === id ? { ...s, lat: c.lat, lng: c.lng } : s)) })}
+          />
+        </Suspense>
+      </div>
+
+    <div className="space-y-5 min-w-0">
       <div className="space-y-4">
         {days.map((d) => {
-          const stops = plan.stops
-            .filter((s) => s.day === d)
-            .sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
+          const stops = stopsOfDay(d);
           return (
             <div key={d}>
               <div className="flex items-center gap-2 mb-2">
-                <span className="px-3 py-1 rounded-full bg-gradient-to-r from-[#FF758F] to-[#FF9A9E] text-white text-xs font-extrabold">Ngày {d}</span>
+                <button
+                  type="button"
+                  onClick={() => setMapDay(d)}
+                  title="Xem ngày này trên bản đồ"
+                  className={`px-3 py-1 rounded-full bg-gradient-to-r from-[#FF758F] to-[#FF9A9E] text-white text-xs font-extrabold transition ${d === activeMapDay ? 'ring-2 ring-offset-2 ring-rose-400 dark:ring-offset-zinc-900' : 'opacity-80 hover:opacity-100'}`}
+                >
+                  Ngày {d}
+                </button>
                 <span className="text-[11px] text-zinc-400">{dateOfDay(d)}</span>
               </div>
               {stops.length === 0 ? (
                 <p className="text-xs text-zinc-400 pl-2 italic">Chưa có hoạt động nào.</p>
               ) : (
                 <ol className="relative ml-3 border-l-2 border-dashed border-rose-200 dark:border-rose-900/60 space-y-2.5">
-                  {stops.map((s) => (
+                  {stops.map((s, stopIndex) => (
                     <li key={s.id} className="relative pl-5">
                       {editingId === s.id ? (
                         <StopForm initial={s} days={days} submitLabel="Lưu" onSubmit={(draft) => saveStop(s.id, draft)} onCancel={() => setEditingId(null)} />
@@ -775,7 +809,10 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
                           </button>
                           <div className={`flex items-start justify-between gap-2 p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-100 dark:border-zinc-800 ${s.done ? 'opacity-60' : ''}`}>
                             <div className="min-w-0">
-                              <p className={`text-sm font-bold text-zinc-800 dark:text-zinc-100 ${s.done ? 'line-through' : ''}`}>{s.title}</p>
+                              <p className={`text-sm font-bold text-zinc-800 dark:text-zinc-100 flex items-center gap-2 ${s.done ? 'line-through' : ''}`}>
+                                <span className="shrink-0 w-5 h-5 rounded-full bg-rose-500 text-white text-[11px] font-extrabold flex items-center justify-center no-underline">{stopIndex + 1}</span>
+                                <span className="min-w-0 break-words">{s.title}</span>
+                              </p>
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">
                                 {s.time && (
                                   <span className="flex items-center gap-1">
@@ -811,6 +848,7 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
       </div>
 
       <StopForm days={days} defaultDay={lastDay} submitLabel="Thêm" onSubmit={addStop} key={`add-${lastDay}`} />
+    </div>
     </div>
   );
 };
