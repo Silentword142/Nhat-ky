@@ -243,6 +243,12 @@ export interface PlanOption {
   reviewUrl?: string;
 }
 
+export interface PlanExtraCost {
+  id: string;
+  label: string;
+  amount?: number; // VND
+}
+
 export type PlanBlock =
   | { id: string; type: 'heading'; text: string }
   | { id: string; type: 'text'; html: string }
@@ -262,6 +268,7 @@ export interface TripPlan {
   status: 'dreaming' | 'planned' | 'done';
   coverIndex: number;
   notes?: string; // legacy plain-text notes (migrated into a text block on first edit)
+  extraCosts?: PlanExtraCost[]; // costs not tied to a single itinerary stop (hotel, transport...)
   blocks?: PlanBlock[]; // free-form content: headings, rich text, checkbox lists, tables, option comparisons
   stops: PlanStop[];
   checklist: PlanChecklistItem[];

@@ -20,7 +20,8 @@ export const PlacePickButton: React.FC<{
   query?: string;
   onPick: (place: PickedPlace) => void;
   className?: string;
-}> = ({ lat, lng, query, onPick, className = '' }) => {
+  compact?: boolean;
+}> = ({ lat, lng, query, onPick, className = '', compact = false }) => {
   const [open, setOpen] = useState(false);
   const has = typeof lat === 'number' && typeof lng === 'number';
   return (
@@ -35,7 +36,7 @@ export const PlacePickButton: React.FC<{
         } ${className}`}
       >
         <MapPin className="w-3.5 h-3.5" />
-        {has ? 'Đã ghim · đổi vị trí' : 'Chọn trên bản đồ'}
+        {compact ? (has ? 'Đã ghim' : 'Bản đồ') : has ? 'Đã ghim · đổi vị trí' : 'Chọn trên bản đồ'}
       </button>
       {open && (
         <Suspense fallback={null}>
