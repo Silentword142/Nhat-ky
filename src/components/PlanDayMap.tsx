@@ -53,6 +53,7 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
 
   const [ready, setReady] = useState(false);
   const [vehicle, setVehicle] = useState<Vehicle>(readVehicle);
+  // keyed by the searched text (not stop id) so switching a stop's option never reuses the old option's position
   const [geo, setGeo] = useState<Record<string, LatLng>>({});
   const [legs, setLegs] = useState<(Leg | null)[]>([]);
   const [loadingLegs, setLoadingLegs] = useState(false);
@@ -85,7 +86,7 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
         const cached = getCachedGeocode(q);
         const hit = cached !== undefined ? cached : await geocodePlace(q);
         if (cancelled) return;
-        if (hit) setGeo((prev) => (prev[s.id]?.lat === hit.lat && prev[s.id]?.lng === hit.lng ? prev : { ...prev, [s.id]: hit }));
+        if (hit) setGeo((prev) => (prev[q]?.lat === hit.lat && prev[q]?.lng === hit.lng ? prev : { ...prev, [q]: hit }));
       }
     })();
     return () => {
@@ -98,7 +99,10 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
     const out: Point[] = [];
     stops.forEach((s, i) => {
       if (typeof s.lat === 'number' && typeof s.lng === 'number') out.push({ stop: s, number: i + 1, pos: { lat: s.lat, lng: s.lng }, approx: false });
-      else if (geo[s.id] && queryFor(s)) out.push({ stop: s, number: i + 1, pos: geo[s.id], approx: true });
+      else {
+        const q = queryFor(s);
+        if (q && geo[q]) out.push({ stop: s, number: i + 1, pos: geo[q], approx: true });
+      }
     });
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -205,7 +209,12 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
         )
       );
       const name = p.stop.title.length > 24 ? `${p.stop.title.slice(0, 23)}…` : p.stop.title;
-      wrap.appendChild(el('div', 'padding:2px 8px;border-radius:8px;background:rgba(255,255,255,.95);color:#27272a;font:700 11px/1.25 system-ui,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.3)', name));
+      const tag = el('div', 'padding:2px 8px;border-radius:8px;background:rgba(255,255,255,.95);color:#27272a;font:700 11px/1.25 system-ui,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.3)', name);
+      if (p.stop.place && !looksLikeUrl(p.stop.place)) {
+        const placeName = p.stop.place.length > 26 ? `${p.stop.place.slice(0, 25)}…` : p.stop.place;
+        tag.appendChild(el('div', 'font-weight:600;font-size:10px;color:#71717a', placeName));
+      }
+      wrap.appendChild(tag);
 
       const popup = el('div', 'font:13px/1.4 system-ui,sans-serif;min-width:140px');
       popup.appendChild(el('div', 'font-weight:800', `${p.number}. ${p.stop.title}`));

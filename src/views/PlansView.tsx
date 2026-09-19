@@ -13,13 +13,14 @@ import {
   ListChecks,
   NotebookPen,
   Pencil,
+  Check,
   Route,
   Plane,
   Sparkles,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useCouple } from '../context/CoupleContext';
-import { TripPlan, PlanStop, PlanBlock, PlanExtraCost } from '../types';
+import { TripPlan, PlanStop, PlanStopAlt, PlanBlock, PlanExtraCost } from '../types';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { formatDateVN } from '../utils/date';
@@ -27,6 +28,7 @@ import { DateInputVN } from '../components/DateInputVN';
 import { PlanBlocksEditor, escapeToHtml } from '../components/PlanBlocks';
 import { PlaceActions, PlacePickButton } from '../components/PlaceTools';
 import { safeUrl } from '../utils/maps';
+import { resolveStop, patchActiveOption } from '../utils/planStops';
 import { evaluateSheet, parseNumber } from '../utils/sheet';
 
 // Leaflet is only downloaded when the itinerary map is actually shown.
@@ -92,7 +94,7 @@ const getProgress = (plan: TripPlan) => {
 };
 
 const getSpent = (plan: TripPlan) =>
-  plan.stops.reduce((sum, s) => sum + (s.cost || 0), 0) + (plan.extraCosts || []).reduce((sum, x) => sum + (x.amount || 0), 0);
+  plan.stops.reduce((sum, s) => sum + (resolveStop(s).cost || 0), 0) + (plan.extraCosts || []).reduce((sum, x) => sum + (x.amount || 0), 0);
 
 const newId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 
@@ -706,10 +708,147 @@ const StopForm: React.FC<{
   );
 };
 
+interface AltDraft {
+  place: string;
+  lat?: number;
+  lng?: number;
+  reviewUrl: string;
+  cost: string;
+}
+
+/** Backup option form: [place + map pin] / [review link · cost] / [buttons]. */
+const AltForm: React.FC<{ initial?: PlanStopAlt; onSubmit: (d: AltDraft) => void; onCancel: () => void }> = ({ initial, onSubmit, onCancel }) => {
+  const [place, setPlace] = useState(initial?.place ?? '');
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
+    typeof initial?.lat === 'number' && typeof initial?.lng === 'number' ? { lat: initial.lat, lng: initial.lng } : null
+  );
+  const [reviewUrl, setReviewUrl] = useState(initial?.reviewUrl ?? '');
+  const [cost, setCost] = useState(initial?.cost ? String(initial.cost) : '');
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!place.trim()) return;
+        onSubmit({ place: place.trim(), lat: coords?.lat, lng: coords?.lng, reviewUrl: reviewUrl.trim(), cost });
+      }}
+      className="mt-2 p-3 rounded-xl bg-white dark:bg-zinc-900 border border-rose-200 dark:border-rose-900/50 space-y-2"
+    >
+      <div className="flex gap-2">
+        <input value={place} onChange={(e) => setPlace(e.target.value)} placeholder="Tên quán / địa điểm dự phòng" className={inputCls} autoFocus />
+        <PlacePickButton
+          compact
+          lat={coords?.lat}
+          lng={coords?.lng}
+          query={place}
+          onPick={(p) => {
+            setCoords({ lat: p.lat, lng: p.lng });
+            if (!place.trim() && p.address) setPlace(p.address.split(',').slice(0, 2).join(',').trim());
+          }}
+        />
+      </div>
+      <div className="grid grid-cols-[minmax(0,1fr)_120px] gap-2">
+        <input value={reviewUrl} onChange={(e) => setReviewUrl(e.target.value)} placeholder="Link review quán" inputMode="url" className={inputCls} />
+        <input value={cost} onChange={(e) => setCost(e.target.value)} placeholder="Chi phí (đ)" className={inputCls} />
+      </div>
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onCancel} className="px-3.5 py-1.5 rounded-xl bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-200 font-bold text-xs">
+          Hủy
+        </button>
+        <button type="submit" disabled={!place.trim()} className="px-4 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-600 disabled:opacity-40 text-white font-bold text-xs">
+          {initial ? 'Lưu phương án' : 'Thêm phương án'}
+        </button>
+      </div>
+    </form>
+  );
+};
+
+const OptionCheck: React.FC<{ checked: boolean }> = ({ checked }) => (
+  <span className={`shrink-0 w-5 h-5 rounded-md border-2 flex items-center justify-center transition ${checked ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-zinc-300 dark:border-zinc-600'}`}>
+    {checked && <Check className="w-3.5 h-3.5 stroke-[3px]" />}
+  </span>
+);
+
+/** Backup options for one activity. Ticking one makes it the option shown on the map (and used for cost). */
+const StopOptions: React.FC<{
+  stop: PlanStop;
+  editingAlt: string | null; // alt id, 'new', or null
+  onEditAlt: (id: string | null) => void;
+  onChoose: (altId?: string) => void;
+  onSaveAlt: (altId: string | null, draft: AltDraft) => void;
+  onRemoveAlt: (altId: string) => void;
+}> = ({ stop, editingAlt, onEditAlt, onChoose, onSaveAlt, onRemoveAlt }) => {
+  const alts = stop.alts || [];
+  const mainActive = !stop.activeAltId || !alts.some((a) => a.id === stop.activeAltId);
+
+  if (alts.length === 0 && editingAlt !== 'new') {
+    return (
+      <button type="button" onClick={() => onEditAlt('new')} className="mt-2 text-[11px] font-bold text-rose-500 hover:text-rose-600 flex items-center gap-1">
+        <Plus className="w-3 h-3" /> Thêm phương án dự phòng
+      </button>
+    );
+  }
+
+  const row = (active: boolean, label: string, badge: string, cost: number | undefined, onTick: () => void, actions?: React.ReactNode) => (
+    <li className={`flex items-center gap-2 px-2 py-1.5 rounded-lg transition ${active ? 'bg-emerald-50 dark:bg-emerald-950/25' : ''}`}>
+      <button type="button" onClick={onTick} className="flex flex-1 min-w-0 items-center gap-2 text-left" aria-pressed={active}>
+        <OptionCheck checked={active} />
+        <span className="min-w-0 flex-1">
+          <span className={`block text-xs truncate ${active ? 'font-bold text-zinc-800 dark:text-zinc-100' : 'text-zinc-600 dark:text-zinc-300'}`}>{label}</span>
+        </span>
+        <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full ${badge === 'Chính' ? 'bg-rose-100 text-rose-600 dark:bg-rose-950/50 dark:text-rose-300' : 'bg-zinc-100 text-zinc-500 dark:bg-zinc-700 dark:text-zinc-300'}`}>{badge}</span>
+        {cost ? <span className="shrink-0 text-[11px] font-semibold text-amber-600 dark:text-amber-400 tabular-nums">{formatVND(cost)}</span> : null}
+      </button>
+      {actions}
+    </li>
+  );
+
+  return (
+    <div className="mt-2.5 pt-2.5 border-t border-dashed border-zinc-200 dark:border-zinc-700">
+      <p className="text-[11px] font-bold text-zinc-500 dark:text-zinc-400 mb-1">Phương án · tích chọn để hiện trên bản đồ</p>
+      <ul className="space-y-0.5">
+        {row(mainActive, stop.place || 'Phương án chính (chưa nhập địa điểm)', 'Chính', stop.cost, () => onChoose(undefined))}
+        {alts.map((a, i) =>
+          editingAlt === a.id ? (
+            <li key={a.id}>
+              <AltForm initial={a} onSubmit={(d) => onSaveAlt(a.id, d)} onCancel={() => onEditAlt(null)} />
+            </li>
+          ) : (
+            row(
+              stop.activeAltId === a.id,
+              a.place || '(chưa đặt tên)',
+              `Dự phòng ${i + 1}`,
+              a.cost,
+              () => onChoose(a.id),
+              <span className="flex shrink-0">
+                <button type="button" onClick={() => onEditAlt(a.id)} className="p-1 text-zinc-300 hover:text-rose-500" aria-label="Sửa phương án">
+                  <Pencil className="w-3 h-3" />
+                </button>
+                <button type="button" onClick={() => onRemoveAlt(a.id)} className="p-1 text-zinc-300 hover:text-red-500" aria-label="Xóa phương án">
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </span>
+            )
+          )
+        )}
+      </ul>
+      {editingAlt === 'new' ? (
+        <AltForm onSubmit={(d) => onSaveAlt(null, d)} onCancel={() => onEditAlt(null)} />
+      ) : (
+        <button type="button" onClick={() => onEditAlt('new')} className="mt-1.5 text-[11px] font-bold text-rose-500 hover:text-rose-600 flex items-center gap-1">
+          <Plus className="w-3 h-3" /> Thêm phương án dự phòng
+        </button>
+      )}
+    </div>
+  );
+};
+
 const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: Partial<TripPlan>) => void }> = ({ plan, duration, onUpdate }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [lastDay, setLastDay] = useState(1);
   const [mapDay, setMapDay] = useState(1);
+  const [altEdit, setAltEdit] = useState<{ stopId: string; alt: string } | null>(null); // alt: id or 'new'
 
   const days = Array.from({ length: Math.max(duration, ...plan.stops.map((s) => s.day), 1) }, (_, i) => i + 1);
 
@@ -734,6 +873,34 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
   const saveStop = (id: string, d: StopDraft) => {
     onUpdate({ stops: plan.stops.map((s) => (s.id === id ? { ...s, ...draftToFields(d) } : s)) });
     setEditingId(null);
+  };
+
+  const chooseOption = (stopId: string, altId?: string) => {
+    onUpdate({ stops: plan.stops.map((s) => (s.id === stopId ? { ...s, activeAltId: altId } : s)) });
+    soundService.playPop();
+  };
+
+  const saveAlt = (stopId: string, altId: string | null, d: AltDraft) => {
+    const fields = { place: d.place, lat: d.lat, lng: d.lng, reviewUrl: safeUrl(d.reviewUrl) || undefined, cost: parseMoneyInput(d.cost) };
+    onUpdate({
+      stops: plan.stops.map((s) => {
+        if (s.id !== stopId) return s;
+        const alts = s.alts || [];
+        return altId
+          ? { ...s, alts: alts.map((a) => (a.id === altId ? { ...a, ...fields } : a)) }
+          : { ...s, alts: [...alts, { id: newId('alt'), ...fields }] };
+      }),
+    });
+    setAltEdit(null);
+  };
+
+  const removeAlt = (stopId: string, altId: string) => {
+    if (!window.confirm('Xóa phương án dự phòng này?')) return;
+    onUpdate({
+      stops: plan.stops.map((s) =>
+        s.id === stopId ? { ...s, alts: (s.alts || []).filter((a) => a.id !== altId), activeAltId: s.activeAltId === altId ? undefined : s.activeAltId } : s
+      ),
+    });
   };
 
   const toggleStop = (id: string) => onUpdate({ stops: plan.stops.map((s) => (s.id === id ? { ...s, done: !s.done } : s)) });
@@ -761,13 +928,13 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
           fallback={<div className="h-64 rounded-2xl bg-zinc-50 dark:bg-zinc-800 flex items-center justify-center text-sm text-zinc-400">Đang tải bản đồ...</div>}
         >
           <PlanDayMap
-            stops={stopsOfDay(activeMapDay)}
+            stops={stopsOfDay(activeMapDay).map(resolveStop)}
             days={days}
             day={activeMapDay}
             dateLabel={dateOfDay(activeMapDay)}
             destination={plan.destination}
             onDayChange={setMapDay}
-            onPinStop={(id, c) => onUpdate({ stops: plan.stops.map((s) => (s.id === id ? { ...s, lat: c.lat, lng: c.lng } : s)) })}
+            onPinStop={(id, c) => onUpdate({ stops: plan.stops.map((s) => (s.id === id ? patchActiveOption(s, { lat: c.lat, lng: c.lng }) : s)) })}
           />
         </Suspense>
       </div>
@@ -793,7 +960,9 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
                 <p className="text-xs text-zinc-400 pl-2 italic">Chưa có hoạt động nào.</p>
               ) : (
                 <ol className="relative ml-3 border-l-2 border-dashed border-rose-200 dark:border-rose-900/60 space-y-2.5">
-                  {stops.map((s, stopIndex) => (
+                  {stops.map((s, stopIndex) => {
+                    const r = resolveStop(s);
+                    return (
                     <li key={s.id} className="relative pl-5">
                       {editingId === s.id ? (
                         <StopForm initial={s} days={days} submitLabel="Lưu" onSubmit={(draft) => saveStop(s.id, draft)} onCancel={() => setEditingId(null)} />
@@ -819,13 +988,21 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
                                     <Clock className="w-3 h-3" /> {s.time}
                                   </span>
                                 )}
-                                {s.place && (
+                                {r.place && (
                                   <span className="flex items-center gap-1">
-                                    <MapPin className="w-3 h-3" /> {s.place}
+                                    <MapPin className="w-3 h-3" /> {r.place}
                                   </span>
                                 )}
                               </div>
-                              <PlaceActions place={{ name: s.place, lat: s.lat, lng: s.lng, reviewUrl: s.reviewUrl }} className="mt-1.5" />
+                              <PlaceActions place={{ name: r.place, lat: r.lat, lng: r.lng, reviewUrl: r.reviewUrl }} className="mt-1.5" />
+                              <StopOptions
+                                stop={s}
+                                editingAlt={altEdit?.stopId === s.id ? altEdit.alt : null}
+                                onEditAlt={(alt) => setAltEdit(alt ? { stopId: s.id, alt } : null)}
+                                onChoose={(altId) => chooseOption(s.id, altId)}
+                                onSaveAlt={(altId, d) => saveAlt(s.id, altId, d)}
+                                onRemoveAlt={(altId) => removeAlt(s.id, altId)}
+                              />
                             </div>
                             <div className="flex items-center shrink-0">
                               <button onClick={() => setEditingId(s.id)} className="p-1.5 rounded-lg text-zinc-300 hover:text-rose-500 transition" aria-label="Sửa hoạt động">
@@ -839,7 +1016,8 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
                         </>
                       )}
                     </li>
-                  ))}
+                    );
+                  })}
                 </ol>
               )}
             </div>
@@ -951,7 +1129,7 @@ const CostTab: React.FC<{ plan: TripPlan; onUpdate: (u: Partial<TripPlan>) => vo
   const [extraLabel, setExtraLabel] = useState('');
   const extras = plan.extraCosts || [];
 
-  const stopsTotal = plan.stops.reduce((sum, s) => sum + (s.cost || 0), 0);
+  const stopsTotal = plan.stops.reduce((sum, s) => sum + (resolveStop(s).cost || 0), 0);
   const extrasTotal = extras.reduce((sum, x) => sum + (x.amount || 0), 0);
   const total = stopsTotal + extrasTotal;
   const pct = plan.budget ? Math.min(100, Math.round((total / plan.budget) * 100)) : 0;
@@ -963,7 +1141,8 @@ const CostTab: React.FC<{ plan: TripPlan; onUpdate: (u: Partial<TripPlan>) => vo
     return isNaN(t) ? '' : formatDateVN(new Date(t + (d - 1) * dayMs));
   };
 
-  const setStopCost = (id: string, cost?: number) => onUpdate({ stops: plan.stops.map((s) => (s.id === id ? { ...s, cost } : s)) });
+  // Cost belongs to whichever option is currently ticked for that activity.
+  const setStopCost = (id: string, cost?: number) => onUpdate({ stops: plan.stops.map((s) => (s.id === id ? patchActiveOption(s, { cost }) : s)) });
   const setExtra = (id: string, updates: Partial<PlanExtraCost>) => onUpdate({ extraCosts: extras.map((x) => (x.id === id ? { ...x, ...updates } : x)) });
 
   const addExtra = (e: React.FormEvent) => {
@@ -1028,7 +1207,7 @@ const CostTab: React.FC<{ plan: TripPlan; onUpdate: (u: Partial<TripPlan>) => vo
         ) : (
           <div className="space-y-4">
             {dayNumbers.map((d) => {
-              const stops = plan.stops.filter((s) => s.day === d).sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
+              const stops = plan.stops.filter((s) => s.day === d).sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99')).map(resolveStop);
               const daySum = stops.reduce((sum, s) => sum + (s.cost || 0), 0);
               return (
                 <div key={d} className="rounded-2xl border border-zinc-200 dark:border-zinc-700 overflow-hidden">

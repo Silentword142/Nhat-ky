@@ -213,6 +213,16 @@ export interface AnniversaryEvent {
   targetDays?: number;
 }
 
+/** A backup choice for the same activity (another restaurant / spot). Overrides the stop's place, pin, review link and cost while ticked. */
+export interface PlanStopAlt {
+  id: string;
+  place: string;
+  lat?: number;
+  lng?: number;
+  reviewUrl?: string;
+  cost?: number; // VND
+}
+
 export interface PlanStop {
   id: string;
   day: number; // 1-based day index within the plan
@@ -223,6 +233,8 @@ export interface PlanStop {
   lat?: number;
   lng?: number;
   reviewUrl?: string;
+  alts?: PlanStopAlt[]; // backup options for this activity
+  activeAltId?: string; // ticked backup option; undefined = the main one above
   done: boolean;
 }
 
