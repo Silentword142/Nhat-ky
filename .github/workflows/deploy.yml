@@ -38,6 +38,9 @@ jobs:
 
       - name: Build static website
         run: npm run build:pages
+        env:
+          # Optional: repo secret with a Google Maps JavaScript API key (restrict it to your github.io domain)
+          VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

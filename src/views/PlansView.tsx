@@ -29,7 +29,7 @@ import { PlanBlocksEditor, escapeToHtml } from '../components/PlanBlocks';
 import { PlaceActions, PlacePickButton } from '../components/PlaceTools';
 import { safeUrl } from '../utils/maps';
 import { resolveStop, patchActiveOption } from '../utils/planStops';
-import { evaluateSheet, parseNumber } from '../utils/sheet';
+import { colName, displayValue, evaluateSheet, isErrorValue, parseNumber } from '../utils/sheet';
 
 // Leaflet is only downloaded when the itinerary map is actually shown.
 const PlanDayMap = React.lazy(() => import('../components/PlanDayMap'));
@@ -1095,7 +1095,7 @@ const parseMoneyInput = (raw: string): number | undefined => {
   return n === null ? undefined : Math.round(n);
 };
 
-const MoneyInput: React.FC<{ value?: number; onCommit: (v: number | undefined) => void; placeholder?: string }> = ({ value, onCommit, placeholder = '0' }) => {
+const MoneyInput: React.FC<{ value?: number; onCommit: (v: number | undefined) => void; placeholder?: string; cell?: boolean; onFocusCell?: () => void }> = ({ value, onCommit, placeholder = '0', cell = false, onFocusCell }) => {
   const fmt = (v?: number) => (v ? v.toLocaleString('vi-VN') : '');
   const [draft, setDraft] = useState(fmt(value));
   const [focused, setFocused] = useState(false);
@@ -1109,24 +1109,220 @@ const MoneyInput: React.FC<{ value?: number; onCommit: (v: number | undefined) =
     if (next !== value) onCommit(next);
   };
   return (
-    <div className="relative w-36 shrink-0">
+    <div className={cell ? 'relative w-full' : 'relative w-36 shrink-0'}>
       <input
         value={draft}
         inputMode="text"
         placeholder={placeholder}
-        onFocus={() => setFocused(true)}
+        onFocus={() => {
+          setFocused(true);
+          onFocusCell?.();
+        }}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-        className="w-full pl-3 pr-7 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 border-0 text-sm font-bold text-right tabular-nums text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-rose-400 placeholder:font-normal placeholder:text-zinc-400"
+        className={
+          cell
+            ? 'w-full pl-2 pr-6 py-2 bg-transparent border-0 text-sm font-semibold text-right tabular-nums text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-inset focus:ring-rose-400 focus:bg-white dark:focus:bg-zinc-900 placeholder:font-normal placeholder:text-zinc-300'
+            : 'w-full pl-3 pr-7 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 border-0 text-sm font-bold text-right tabular-nums text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-rose-400 placeholder:font-normal placeholder:text-zinc-400'
+        }
       />
-      <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-zinc-400">đ</span>
+      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs font-bold text-zinc-400">đ</span>
+    </div>
+  );
+};
+
+type SheetRowKind = 'header' | 'stop' | 'daysum' | 'section' | 'extra' | 'extrasum' | 'total';
+interface SheetRow {
+  kind: SheetRowKind;
+  cells: string[]; // A..E, raw text / formula — this is what the formula engine evaluates
+  stop?: PlanStop;
+  extra?: PlanExtraCost;
+}
+
+const SHEET_COLS = ['Ngày', 'Giờ', 'Hoạt động', 'Địa điểm', 'Chi phí (đ)'];
+const COST_COL = 4; // column E
+
+/** Excel-style cost table: rows come from the itinerary; sums are real =SUM() formulas evaluated by the sheet engine. */
+const CostSheet: React.FC<{
+  plan: TripPlan;
+  onStopCost: (id: string, cost?: number) => void;
+  onExtraLabel: (id: string, label: string) => void;
+  onExtraAmount: (id: string, amount?: number) => void;
+  onExtraRemove: (id: string) => void;
+  onExtraAdd: (label: string) => void;
+}> = ({ plan, onStopCost, onExtraLabel, onExtraAmount, onExtraRemove, onExtraAdd }) => {
+  const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
+  const [extraLabel, setExtraLabel] = useState('');
+  const extras = plan.extraCosts || [];
+
+  const rows: SheetRow[] = [{ kind: 'header', cells: [...SHEET_COLS] }];
+  const sumRows: number[] = []; // 1-based row numbers of the subtotal rows
+  const rowNo = () => rows.length + 1;
+  const E = (n: number) => `E${n}`;
+
+  const dayNumbers = Array.from(new Set<number>(plan.stops.map((s) => s.day))).sort((a, b) => a - b);
+  for (const d of dayNumbers) {
+    const first = rowNo();
+    plan.stops
+      .filter((s) => s.day === d)
+      .sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'))
+      .forEach((raw) => {
+        const s = resolveStop(raw);
+        rows.push({ kind: 'stop', stop: raw, cells: [`Ngày ${d}`, s.time || '', s.title, s.place && !/^https?:/i.test(s.place) ? s.place : '', s.cost ? String(s.cost) : ''] });
+      });
+    const last = rowNo() - 1;
+    sumRows.push(rowNo());
+    rows.push({ kind: 'daysum', cells: ['', '', `Cộng ngày ${d}`, '', `=SUM(${E(first)}:${E(last)})`] });
+  }
+
+  rows.push({ kind: 'section', cells: ['', '', 'CHI PHÍ KHÁC', '', ''] });
+  if (extras.length > 0) {
+    const first = rowNo();
+    extras.forEach((x) => rows.push({ kind: 'extra', extra: x, cells: ['', '', x.label, '', x.amount ? String(x.amount) : ''] }));
+    const last = rowNo() - 1;
+    sumRows.push(rowNo());
+    rows.push({ kind: 'extrasum', cells: ['', '', 'Cộng chi phí khác', '', `=SUM(${E(first)}:${E(last)})`] });
+  }
+  rows.push({ kind: 'total', cells: ['', '', 'TỔNG CỘNG', '', sumRows.length ? `=${sumRows.map(E).join('+')}` : '=0'] });
+
+  const values = evaluateSheet(rows.map((r) => r.cells));
+  const selCell = selected ? rows[selected.r]?.cells[selected.c] : undefined;
+  const selVal = selected ? values[selected.r]?.[selected.c] : undefined;
+
+  const rowStyle: Record<SheetRowKind, string> = {
+    header: 'bg-rose-100 dark:bg-rose-950/40 font-extrabold text-rose-700 dark:text-rose-300',
+    stop: '',
+    daysum: 'bg-amber-50 dark:bg-amber-950/20 font-bold',
+    section: 'bg-zinc-100 dark:bg-zinc-800 font-extrabold text-zinc-600 dark:text-zinc-300',
+    extra: '',
+    extrasum: 'bg-amber-50 dark:bg-amber-950/20 font-bold',
+    total: 'bg-emerald-50 dark:bg-emerald-950/25 font-extrabold text-emerald-700 dark:text-emerald-300 border-t-2 border-double border-emerald-400',
+  };
+  const cell = 'border-r border-t border-zinc-200 dark:border-zinc-700 px-2.5 py-2 align-middle';
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <h4 className="text-sm font-bold text-zinc-800 dark:text-zinc-100">Bảng chi phí</h4>
+        <span className="text-[11px] text-zinc-400">Hoạt động tự lấy từ Lịch trình · gõ 50k, 1,5tr hoặc =2*300000</span>
+      </div>
+
+      {/* Formula bar */}
+      <div className="flex items-center gap-2 mb-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60 px-2.5 py-1.5 text-xs">
+        <span className="shrink-0 w-10 text-center font-bold text-zinc-500">{selected ? `${colName(selected.c)}${selected.r + 1}` : '—'}</span>
+        <span className="text-zinc-300">|</span>
+        <span className="shrink-0 italic font-serif text-zinc-400">fx</span>
+        <span className="min-w-0 truncate font-mono text-zinc-700 dark:text-zinc-200">
+          {selected ? selCell || <span className="text-zinc-300">(trống)</span> : 'Bấm vào một ô để xem công thức'}
+        </span>
+        {selected && selCell?.startsWith('=') && <span className="ml-auto shrink-0 font-bold text-emerald-600 tabular-nums">= {displayValue(selVal ?? '')}</span>}
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-zinc-300 dark:border-zinc-600">
+        <table className="w-full border-collapse text-sm min-w-[560px]">
+          <thead>
+            <tr className="bg-zinc-100 dark:bg-zinc-800 text-[10px] font-bold text-zinc-400">
+              <th className="w-9 border-r border-zinc-200 dark:border-zinc-700" />
+              {SHEET_COLS.map((_, c) => (
+                <th key={c} className="border-r border-zinc-200 dark:border-zinc-700 py-1">
+                  {colName(c)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, r) => {
+              const isSelectedRow = selected?.r === r;
+              return (
+                <tr key={`${row.kind}-${row.stop?.id || row.extra?.id || r}`} className={`group ${rowStyle[row.kind]}`}>
+                  <td className={`relative w-9 text-center text-[10px] font-normal select-none bg-zinc-50 dark:bg-zinc-800 text-zinc-400 border-r border-t border-zinc-200 dark:border-zinc-700 ${isSelectedRow ? '!bg-rose-100 !text-rose-600 font-bold' : ''}`}>
+                    {row.kind === 'extra' && row.extra ? (
+                      <>
+                        <span className="group-hover:hidden">{r + 1}</span>
+                        <button type="button" onClick={() => onExtraRemove(row.extra!.id)} className="hidden group-hover:inline text-zinc-400 hover:text-red-500" aria-label="Xóa khoản chi">
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </>
+                    ) : (
+                      r + 1
+                    )}
+                  </td>
+                  {row.cells.map((raw, c) => {
+                    const isCost = c === COST_COL;
+                    const val = values[r]?.[c];
+                    const isFormula = raw.startsWith('=');
+                    const pick = () => setSelected({ r, c });
+                    const isSel = selected?.r === r && selected?.c === c;
+                    const ring = isSel ? 'outline outline-2 -outline-offset-2 outline-rose-400' : '';
+
+                    if (row.kind === 'stop' && isCost && row.stop) {
+                      return (
+                        <td key={c} className={`${cell} p-0 ${ring}`} onClick={pick}>
+                          <MoneyInput cell value={parseNumber(raw) ?? undefined} onCommit={(v) => onStopCost(row.stop!.id, v)} onFocusCell={pick} />
+                        </td>
+                      );
+                    }
+                    if (row.kind === 'extra' && row.extra) {
+                      if (isCost) {
+                        return (
+                          <td key={c} className={`${cell} p-0 ${ring}`} onClick={pick}>
+                            <MoneyInput cell value={row.extra.amount} onCommit={(v) => onExtraAmount(row.extra!.id, v)} onFocusCell={pick} />
+                          </td>
+                        );
+                      }
+                      if (c === 2) {
+                        return (
+                          <td key={c} className={`${cell} p-0 ${ring}`} onClick={pick}>
+                            <input
+                              defaultValue={raw}
+                              onFocus={pick}
+                              onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== raw && onExtraLabel(row.extra!.id, e.target.value.trim())}
+                              className="w-full px-2.5 py-2 bg-transparent border-0 text-sm text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-inset focus:ring-rose-400"
+                            />
+                          </td>
+                        );
+                      }
+                    }
+
+                    const shown = isFormula ? displayValue(val ?? '') : raw;
+                    return (
+                      <td key={c} onClick={pick} className={`${cell} ${ring} ${isCost ? 'text-right tabular-nums' : ''} ${c <= 1 ? 'text-zinc-500 dark:text-zinc-400 whitespace-nowrap' : ''}`}>
+                        {c === 3 ? <span className="block max-w-[220px] truncate text-zinc-500 dark:text-zinc-400" title={shown}>{shown}</span> : shown}
+                        {isCost && isFormula && !isErrorValue(val) ? <span className="ml-1 text-xs opacity-60">đ</span> : null}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {plan.stops.length === 0 && (
+        <p className="text-[11px] text-zinc-400 italic mt-2">Chưa có hoạt động nào: thêm ở tab Lịch trình, các dòng sẽ tự xuất hiện ở đây để bạn điền chi phí.</p>
+      )}
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!extraLabel.trim()) return;
+          onExtraAdd(extraLabel.trim());
+          setExtraLabel('');
+        }}
+        className="flex gap-2 mt-2.5"
+      >
+        <input value={extraLabel} onChange={(e) => setExtraLabel(e.target.value)} placeholder="Thêm dòng chi phí khác: khách sạn, vé máy bay, xăng xe..." className={inputCls} />
+        <button type="submit" disabled={!extraLabel.trim()} className="px-4 rounded-xl bg-rose-500 hover:bg-rose-600 disabled:opacity-40 text-white font-bold text-sm transition whitespace-nowrap">
+          Thêm dòng
+        </button>
+      </form>
     </div>
   );
 };
 
 const CostTab: React.FC<{ plan: TripPlan; onUpdate: (u: Partial<TripPlan>) => void }> = ({ plan, onUpdate }) => {
-  const [extraLabel, setExtraLabel] = useState('');
   const extras = plan.extraCosts || [];
 
   const stopsTotal = plan.stops.reduce((sum, s) => sum + (resolveStop(s).cost || 0), 0);
@@ -1135,23 +1331,9 @@ const CostTab: React.FC<{ plan: TripPlan; onUpdate: (u: Partial<TripPlan>) => vo
   const pct = plan.budget ? Math.min(100, Math.round((total / plan.budget) * 100)) : 0;
   const over = plan.budget ? total > plan.budget : false;
 
-  const dayNumbers = Array.from(new Set<number>(plan.stops.map((s) => s.day))).sort((a, b) => a - b);
-  const dateOfDay = (d: number) => {
-    const t = toLocalMidnight(plan.startDate);
-    return isNaN(t) ? '' : formatDateVN(new Date(t + (d - 1) * dayMs));
-  };
-
   // Cost belongs to whichever option is currently ticked for that activity.
   const setStopCost = (id: string, cost?: number) => onUpdate({ stops: plan.stops.map((s) => (s.id === id ? patchActiveOption(s, { cost }) : s)) });
   const setExtra = (id: string, updates: Partial<PlanExtraCost>) => onUpdate({ extraCosts: extras.map((x) => (x.id === id ? { ...x, ...updates } : x)) });
-
-  const addExtra = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!extraLabel.trim()) return;
-    onUpdate({ extraCosts: [...extras, { id: newId('cost'), label: extraLabel.trim() }] });
-    setExtraLabel('');
-    soundService.playPop();
-  };
 
   // Plans made before this tab existed keep their plain notes / blocks; show them as content blocks.
   const blocks: PlanBlock[] = plan.blocks ?? (plan.notes?.trim() ? [{ id: 'legacy_notes', type: 'text', html: escapeToHtml(plan.notes) }] : []);
@@ -1194,78 +1376,18 @@ const CostTab: React.FC<{ plan: TripPlan; onUpdate: (u: Partial<TripPlan>) => vo
         </div>
       </div>
 
-      {/* Costs pulled from the itinerary */}
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <h4 className="text-sm font-bold text-zinc-800 dark:text-zinc-100">Chi phí theo lịch trình</h4>
-          <span className="text-[11px] text-zinc-400">Tự lấy từ tab Lịch trình · gõ 50k, 1,5tr hoặc =2*300000</span>
-        </div>
-        {plan.stops.length === 0 ? (
-          <p className="text-xs text-zinc-400 italic p-4 rounded-2xl border border-dashed border-zinc-200 dark:border-zinc-700 text-center">
-            Chưa có hoạt động nào. Thêm hoạt động ở tab Lịch trình, chúng sẽ tự xuất hiện ở đây để bạn điền chi phí.
-          </p>
-        ) : (
-          <div className="space-y-4">
-            {dayNumbers.map((d) => {
-              const stops = plan.stops.filter((s) => s.day === d).sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99')).map(resolveStop);
-              const daySum = stops.reduce((sum, s) => sum + (s.cost || 0), 0);
-              return (
-                <div key={d} className="rounded-2xl border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                  <div className="flex items-center justify-between px-3.5 py-2 bg-rose-50 dark:bg-rose-950/30">
-                    <span className="text-xs font-extrabold text-rose-600 dark:text-rose-300">
-                      Ngày {d} <span className="font-medium text-rose-400">{dateOfDay(d)}</span>
-                    </span>
-                    <span className="text-xs font-bold text-zinc-600 dark:text-zinc-300 tabular-nums">{formatVND(daySum)}</span>
-                  </div>
-                  <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                    {stops.map((s) => (
-                      <li key={s.id} className="flex items-center gap-3 px-3.5 py-2.5">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-100 truncate">{s.title}</p>
-                          <p className="text-[11px] text-zinc-400 truncate">
-                            {[s.time, s.place].filter(Boolean).join(' · ') || '—'}
-                          </p>
-                        </div>
-                        <MoneyInput value={s.cost} onCommit={(v) => setStopCost(s.id, v)} />
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Extra costs */}
-      <div>
-        <h4 className="text-sm font-bold text-zinc-800 dark:text-zinc-100 mb-2">Chi phí khác</h4>
-        <div className="rounded-2xl border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-          {extras.length > 0 && (
-            <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
-              {extras.map((x) => (
-                <li key={x.id} className="flex items-center gap-3 px-3.5 py-2.5">
-                  <input
-                    defaultValue={x.label}
-                    onBlur={(e) => e.target.value.trim() !== x.label && setExtra(x.id, { label: e.target.value.trim() || x.label })}
-                    className="flex-1 min-w-0 bg-transparent border-0 p-0 text-sm font-semibold text-zinc-800 dark:text-zinc-100 focus:ring-0"
-                  />
-                  <MoneyInput value={x.amount} onCommit={(v) => setExtra(x.id, { amount: v })} />
-                  <button onClick={() => onUpdate({ extraCosts: extras.filter((e) => e.id !== x.id) })} className="p-1 text-zinc-300 hover:text-red-500" aria-label="Xóa khoản chi">
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <form onSubmit={addExtra} className="flex gap-2 p-2.5 bg-zinc-50 dark:bg-zinc-800/50">
-            <input value={extraLabel} onChange={(e) => setExtraLabel(e.target.value)} placeholder="Thêm khoản: khách sạn, vé máy bay, xăng xe..." className={inputCls} />
-            <button type="submit" disabled={!extraLabel.trim()} className="px-4 rounded-xl bg-rose-500 hover:bg-rose-600 disabled:opacity-40 text-white font-bold text-sm transition whitespace-nowrap">
-              Thêm
-            </button>
-          </form>
-        </div>
-      </div>
+      {/* Excel-style cost table, rows synced from the itinerary */}
+      <CostSheet
+        plan={plan}
+        onStopCost={setStopCost}
+        onExtraLabel={(id, label) => setExtra(id, { label })}
+        onExtraAmount={(id, amount) => setExtra(id, { amount })}
+        onExtraRemove={(id) => onUpdate({ extraCosts: extras.filter((x) => x.id !== id) })}
+        onExtraAdd={(label) => {
+          onUpdate({ extraCosts: [...extras, { id: newId('cost'), label }] });
+          soundService.playPop();
+        }}
+      />
 
       {/* Free-form notes, checklists, formula tables and option comparisons */}
       <div>

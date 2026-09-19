@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, MapPinOff, ExternalLink } from 'lucide-react';
-import type * as LeafletNS from 'leaflet';
-import 'leaflet/dist/leaflet.css';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2, MapPinOff, ExternalLink, LocateFixed, KeyRound } from 'lucide-react';
 import { PlanStop } from '../types';
 import { LatLng } from '../utils/maps';
 import { PlacePickButton } from './PlaceTools';
+import { useMapAdapter } from './mapEngines';
+import { getBuildTimeGoogleMapsKey } from '../services/googleMaps';
 import { Leg, Vehicle, VEHICLES, formatKm, formatMinutes, geocodePlace, getCachedGeocode, getLeg, looksLikeUrl } from '../services/routing';
 
 interface Props {
@@ -26,7 +26,6 @@ interface Point {
 }
 
 const VEHICLE_KEY = 'lovesync_plan_vehicle';
-const ROUTE_COLOR = '#f43f5e';
 
 const readVehicle = (): Vehicle => {
   try {
@@ -45,19 +44,88 @@ const el = (tag: string, css: string, text?: string) => {
   return e;
 };
 
-const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination, onDayChange, onPinStop }) => {
-  const mapEl = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<LeafletNS.Map | null>(null);
-  const layerRef = useRef<LeafletNS.LayerGroup | null>(null);
-  const leafletRef = useRef<typeof LeafletNS | null>(null);
+/** Shows which map is active and lets the user paste a Google Maps API key. */
+const MapEngineBar: React.FC<{ engine: 'google' | 'osm'; notice: string; keyValue: string; onSaveKey: (k: string) => void }> = ({ engine, notice, keyValue, onSaveKey }) => {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState('');
+  const fromBuild = !!getBuildTimeGoogleMapsKey();
 
-  const [ready, setReady] = useState(false);
+  if (engine === 'google') {
+    return (
+      <div className="px-3 pb-2 flex items-center justify-between text-[11px] text-emerald-600 dark:text-emerald-400 font-bold">
+        <span>✅ Đang dùng Google Maps</span>
+        {!fromBuild && keyValue && (
+          <button type="button" onClick={() => onSaveKey('')} className="text-zinc-400 hover:text-red-500 font-semibold">
+            Gỡ API key
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-3 mb-2 rounded-xl bg-amber-50 dark:bg-amber-950/25 border border-amber-200 dark:border-amber-900/50 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-300">
+      {notice && <p className="font-semibold text-red-600 dark:text-red-400 mb-1">{notice}</p>}
+      <div className="flex items-center justify-between gap-2">
+        <span>Đang dùng bản đồ OpenStreetMap (miễn phí).</span>
+        <button type="button" onClick={() => setOpen((o) => !o)} className="shrink-0 font-bold text-blue-600 dark:text-blue-400 flex items-center gap-1">
+          <KeyRound className="w-3 h-3" /> Dùng Google Maps
+        </button>
+      </div>
+      {open && (
+        <div className="mt-2 space-y-1.5">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (draft.trim()) onSaveKey(draft);
+            }}
+            className="flex gap-1.5"
+          >
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="Dán Google Maps API key (AIza...)"
+              className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-800 border border-amber-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-100"
+            />
+            <button type="submit" disabled={!draft.trim()} className="px-3 rounded-lg bg-blue-500 hover:bg-blue-600 disabled:opacity-40 text-white font-bold">
+              Lưu
+            </button>
+          </form>
+          <p className="text-amber-700/80 dark:text-amber-300/80 leading-relaxed">
+            Tạo key trong Google Cloud Console → bật <b>Maps JavaScript API</b> → Credentials → Create API key. Nên giới hạn key theo tên miền web của bạn. Key chỉ lưu trên trình duyệt này; để cả hai người cùng dùng, đặt secret <code>GOOGLE_MAPS_API_KEY</code> trên GitHub.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination, onDayChange, onPinStop }) => {
+  const { setContainer, adapter, engine, notice, key: mapKey, saveKey } = useMapAdapter();
+  const elRef = useRef<HTMLDivElement | null>(null);
+  const attachContainer = useCallback(
+    (node: HTMLDivElement | null) => {
+      elRef.current = node;
+      setContainer(node);
+    },
+    [setContainer]
+  );
+
   const [vehicle, setVehicle] = useState<Vehicle>(readVehicle);
   // keyed by the searched text (not stop id) so switching a stop's option never reuses the old option's position
   const [geo, setGeo] = useState<Record<string, LatLng>>({});
   const [legs, setLegs] = useState<(Leg | null)[]>([]);
   const [loadingLegs, setLoadingLegs] = useState(false);
   const [fitTick, setFitTick] = useState(0);
+
+  // "My location" on the map
+  const [showMe, setShowMe] = useState(false);
+  const [me, setMe] = useState<{ lat: number; lng: number; acc: number } | null>(null);
+  const [meMsg, setMeMsg] = useState('');
+  const meRef = useRef(me);
+  meRef.current = me;
+  const showMeRef = useRef(showMe);
+  showMeRef.current = showMe;
 
   const pickVehicle = (v: Vehicle) => {
     setVehicle(v);
@@ -131,72 +199,73 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pointSignature, vehicle]);
 
-  // Create the map once.
+  // The container can be 0-wide while a modal animates in or a tab is hidden; fitting then picks a wrong
+  // zoom. Re-measure and re-fit as soon as it gets a real size.
   useEffect(() => {
-    let cancelled = false;
-    let resizeObs: ResizeObserver | null = null;
-    (async () => {
-      const mod = await import('leaflet');
-      const L = ((mod as unknown as { default?: typeof LeafletNS }).default ?? mod) as typeof LeafletNS;
-      if (cancelled || !mapEl.current || mapRef.current) return;
-      leafletRef.current = L;
-      const map = L.map(mapEl.current, { zoomControl: true }).setView([16.05, 106.3], 5);
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      }).addTo(map);
-      layerRef.current = L.layerGroup().addTo(map);
-      mapRef.current = map;
-      setReady(true);
-      setTimeout(() => map.invalidateSize(), 250);
-      // The container can be 0-wide while a modal animates in or a tab is hidden; fitting then picks a
-      // wrong zoom. Re-measure and re-fit as soon as it gets a real size.
-      if (typeof ResizeObserver !== 'undefined') {
-        resizeObs = new ResizeObserver(() => {
-          if (mapEl.current && mapEl.current.clientWidth > 0) {
-            map.invalidateSize();
-            setFitTick((t) => t + 1);
-          }
-        });
-        resizeObs.observe(mapEl.current);
+    const node = elRef.current;
+    if (!adapter || !node || typeof ResizeObserver === 'undefined') return;
+    const obs = new ResizeObserver(() => {
+      if (node.clientWidth > 0) {
+        adapter.resize();
+        setFitTick((t) => t + 1);
       }
-    })();
-    return () => {
-      cancelled = true;
-      resizeObs?.disconnect();
-      mapRef.current?.remove();
-      mapRef.current = null;
-      layerRef.current = null;
-    };
-  }, []);
+    });
+    obs.observe(node);
+    return () => obs.disconnect();
+  }, [adapter]);
+
+  // Live location (blue dot).
+  useEffect(() => {
+    if (!showMe) {
+      setMe(null);
+      return;
+    }
+    if (!navigator.geolocation) {
+      setMeMsg('Trình duyệt không hỗ trợ định vị.');
+      setShowMe(false);
+      return;
+    }
+    setMeMsg('Đang lấy vị trí của bạn...');
+    const id = navigator.geolocation.watchPosition(
+      (pos) => {
+        const first = !meRef.current;
+        const next = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
+        meRef.current = next;
+        setMe(next);
+        setMeMsg('');
+        if (first) setFitTick((t) => t + 1); // include me in the view once
+      },
+      () => {
+        setMeMsg('Không lấy được vị trí — hãy cho phép trang truy cập vị trí trong trình duyệt.');
+        setShowMe(false);
+      },
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
+    );
+    return () => navigator.geolocation.clearWatch(id);
+  }, [showMe]);
+
+  useEffect(() => {
+    adapter?.setMe(showMe && me ? { lat: me.lat, lng: me.lng } : null, me?.acc);
+  }, [adapter, me, showMe]);
 
   // Draw pins, route lines and distance labels whenever anything changes.
   useEffect(() => {
-    const L = leafletRef.current;
-    const map = mapRef.current;
-    const layer = layerRef.current;
-    if (!ready || !L || !map || !layer) return;
-    layer.clearLayers();
-    const bounds: [number, number][] = [];
+    if (!adapter) return;
+    adapter.clear();
+    const view: LatLng[] = [];
 
-    legs.forEach((leg, i) => {
+    legs.forEach((leg) => {
       if (!leg) return;
-      L.polyline(leg.geometry, {
-        color: ROUTE_COLOR,
-        weight: 5,
-        opacity: 0.85,
-        dashArray: leg.estimated ? '2 10' : undefined,
-        lineCap: 'round',
-      }).addTo(layer);
-      leg.geometry.forEach((g) => bounds.push(g));
+      adapter.addLine(leg.geometry, { dashed: leg.estimated });
+      leg.geometry.forEach(([lat, lng]) => view.push({ lat, lng }));
 
-      const mid = leg.geometry[Math.floor(leg.geometry.length / 2)];
+      const [midLat, midLng] = leg.geometry[Math.floor(leg.geometry.length / 2)];
       const label = el(
         'div',
         'transform:translate(-50%,-50%);white-space:nowrap;padding:3px 9px;border-radius:999px;background:#fff;border:2px solid #f43f5e;color:#be123c;font:700 11px/1.2 system-ui,sans-serif;box-shadow:0 2px 6px rgba(0,0,0,.25)',
         `${VEHICLES[vehicle].emoji} ${formatKm(leg.km)} · ${formatMinutes(leg.minutes)}${leg.estimated ? ' ≈' : ''}`
       );
-      L.marker(mid, { icon: L.divIcon({ className: '', html: label, iconSize: [0, 0] }), interactive: false, zIndexOffset: 500 }).addTo(layer);
+      adapter.addHtml({ lat: midLat, lng: midLng }, label, { z: 500 });
     });
 
     points.forEach((p) => {
@@ -216,23 +285,19 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
       }
       wrap.appendChild(tag);
 
-      const popup = el('div', 'font:13px/1.4 system-ui,sans-serif;min-width:140px');
+      const popup = el('div', 'font:13px/1.4 system-ui,sans-serif;min-width:140px;color:#27272a');
       popup.appendChild(el('div', 'font-weight:800', `${p.number}. ${p.stop.title}`));
       if (p.stop.place) popup.appendChild(el('div', 'color:#52525b', p.stop.place));
       if (p.stop.time) popup.appendChild(el('div', 'color:#71717a', `🕒 ${p.stop.time}`));
       if (p.approx) popup.appendChild(el('div', 'color:#c2410c;margin-top:4px;font-size:11px', 'Vị trí tự tìm theo tên — hãy ghim chính xác nếu lệch.'));
 
-      L.marker([p.pos.lat, p.pos.lng], { icon: L.divIcon({ className: '', html: wrap, iconSize: [0, 0] }), zIndexOffset: 1000 })
-        .bindPopup(popup)
-        .addTo(layer);
-      bounds.push([p.pos.lat, p.pos.lng]);
+      adapter.addHtml(p.pos, wrap, { z: 1000, popup });
+      view.push(p.pos);
     });
 
-    map.invalidateSize(); // container may have just been laid out (modal animation) — measure before fitting
-    // No animation: re-fitting on every edit should just snap, and it can't get stuck mid-transition.
-    if (bounds.length === 1) map.setView(bounds[0], 15, { animate: false });
-    else if (bounds.length > 1) map.fitBounds(bounds, { padding: [48, 48], maxZoom: 16, animate: false });
-  }, [ready, points, legs, vehicle, fitTick]);
+    if (showMeRef.current && meRef.current) view.push({ lat: meRef.current.lat, lng: meRef.current.lng });
+    adapter.fit(view);
+  }, [adapter, points, legs, vehicle, fitTick]);
 
   const totalKm = legs.reduce((s, l) => s + (l?.km || 0), 0);
   const totalMin = legs.reduce((s, l) => s + (l?.minutes || 0), 0);
@@ -289,16 +354,18 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
         ))}
       </div>
 
+      <MapEngineBar engine={engine} notice={notice} keyValue={mapKey} onSaveKey={saveKey} />
+
       {/* Map */}
       <div className="relative h-[320px] lg:h-[420px]">
-        <div ref={mapEl} className="absolute inset-0" style={{ zIndex: 0 }} />
-        {!ready && (
+        <div key={engine} ref={attachContainer} className="absolute inset-0" style={{ zIndex: 0 }} />
+        {!adapter && (
           <div className="absolute inset-0 flex items-center justify-center bg-zinc-50 dark:bg-zinc-800 text-sm text-zinc-400 gap-2">
             <Loader2 className="w-4 h-4 animate-spin" /> Đang tải bản đồ...
           </div>
         )}
-        {ready && points.length === 0 && (
-          <div className="absolute inset-x-4 top-4 z-[500] rounded-xl bg-white/95 dark:bg-zinc-900/95 shadow px-3 py-2 text-xs text-zinc-600 dark:text-zinc-300 text-center">
+        {adapter && points.length === 0 && (
+          <div className="absolute inset-x-4 top-4 z-[500] rounded-xl bg-white/95 dark:bg-zinc-900/95 shadow px-3 py-2 text-xs text-zinc-600 dark:text-zinc-300 text-center pointer-events-none">
             {stops.length === 0 ? `Ngày ${day} chưa có hoạt động nào.` : 'Nhập địa điểm hoặc ghim vị trí cho hoạt động để hiện lên bản đồ.'}
           </div>
         )}
@@ -307,7 +374,18 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
             <Loader2 className="w-3 h-3 animate-spin" /> Đang tính đường đi...
           </div>
         )}
+        <button
+          type="button"
+          onClick={() => setShowMe((v) => !v)}
+          className={`absolute bottom-3 right-3 z-[500] rounded-full shadow px-3 py-1.5 text-[11px] font-bold flex items-center gap-1.5 transition ${
+            showMe ? 'bg-blue-500 text-white' : 'bg-white/95 dark:bg-zinc-900/95 text-blue-600 dark:text-blue-400'
+          }`}
+          title="Hiện vị trí hiện tại của tôi"
+        >
+          <LocateFixed className="w-3.5 h-3.5" /> {showMe ? 'Đang hiện vị trí của tôi' : 'Vị trí của tôi'}
+        </button>
       </div>
+      {meMsg && <p className="px-3 pt-2 text-[11px] text-zinc-500 dark:text-zinc-400">{meMsg}</p>}
 
       {/* Route summary */}
       <div className="p-3 space-y-2.5">
