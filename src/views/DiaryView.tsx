@@ -292,22 +292,99 @@ export const DiaryView: React.FC = () => {
     setTimeout(() => setIsFlipping(false), 320);
   };
 
-  // Reconstructs the full draft with just the CURRENT page's text replaced, then — if that page's
-  // new text overflows 15 lines on its own — splits it and pushes the overflow onto the next page,
-  // advancing there with a flip. Pasting/typing several pages' worth at once only cascades one
-  // level per keystroke (matches the original app's behavior); another keystroke cascades further.
-  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const before = pages.slice(0, currentPageIdx).join('');
-    const after = pages.slice(currentPageIdx + 1).join('');
-    const { fits, overflow } = splitOnePage(e.target.value, MAX_LINES_PER_PAGE);
-    if (!overflow) {
-      setInlineContent(before + fits + after);
+  // Where the caret must end up once React has rewritten the textarea's value. A controlled
+  // textarea drops the caret at the end of the new value, which throws the writer out of the
+  // middle of a sentence — every path that changes the text says where the caret belongs instead.
+  const pendingCaretRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta || pendingCaretRef.current === null) return;
+    const pos = Math.min(Math.max(0, pendingCaretRef.current), ta.value.length);
+    pendingCaretRef.current = null;
+    ta.setSelectionRange(pos, pos);
+  });
+
+  // Vietnamese is typed through an IME (Telex/VNI on desktop, any phone keyboard): the word is
+  // still being composed while `input` events fire. Rewriting the textarea's value in the middle
+  // of that composition tears the half-typed word apart — letters end up stranded on the previous
+  // page and the rest of the word goes wrong. So the page layout is frozen until the word is done.
+  const compositionRef = useRef<{ before: string; after: string } | null>(null);
+  const [composingValue, setComposingValue] = useState<string | null>(null);
+
+  // Writes `value` back as this page's text, re-splitting it if it now overflows 15 lines.
+  // The page only turns when the writing is happening at the END of the page: editing in the
+  // middle of a full page pushes the tail onto the next page but leaves the writer where they are.
+  const commitPageText = (value: string, caret: number, before: string, after: string) => {
+    const { fits, overflow } = splitOnePage(value, MAX_LINES_PER_PAGE);
+    setInlineContent(before + fits + overflow + after);
+    if (!overflow || caret <= fits.length) {
+      pendingCaretRef.current = caret;
       return;
     }
-    setInlineContent(before + fits + overflow + after);
     playDraftPageFlip('next');
     setCurrentPageIdx((prev) => prev + 1);
+    pendingCaretRef.current = caret - fits.length;
   };
+
+  const pageTextBefore = (idx: number) => pages.slice(0, idx).join('');
+  const pageTextAfter = (idx: number) => pages.slice(idx + 1).join('');
+
+  // Reconstructs the full draft with just the CURRENT page's text replaced. Pasting/typing several
+  // pages' worth at once only cascades one level per keystroke (matches the original app's
+  // behavior); another keystroke cascades further.
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    const caret = e.target.selectionStart ?? value.length;
+    const composing = compositionRef.current;
+    if (composing) {
+      // Keep the writer's own text on screen untouched; it is re-split at compositionend.
+      setComposingValue(value);
+      setInlineContent(composing.before + value + composing.after);
+      return;
+    }
+    commitPageText(value, caret, pageTextBefore(currentPageIdx), pageTextAfter(currentPageIdx));
+  };
+
+  const handleCompositionStart = () => {
+    compositionRef.current = { before: pageTextBefore(currentPageIdx), after: pageTextAfter(currentPageIdx) };
+    setComposingValue(pages[currentPageIdx] ?? '');
+  };
+
+  const handleCompositionEnd = (e: React.CompositionEvent<HTMLTextAreaElement>) => {
+    const composing = compositionRef.current;
+    compositionRef.current = null;
+    setComposingValue(null);
+    const value = e.currentTarget.value;
+    const caret = e.currentTarget.selectionStart ?? value.length;
+    commitPageText(value, caret, composing?.before ?? pageTextBefore(currentPageIdx), composing?.after ?? pageTextAfter(currentPageIdx));
+  };
+
+  // Backspace at the very start of a page deletes the previous page's last character and carries
+  // on editing there — the same as one continuous text, instead of dead-ending at the page break.
+  const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const ta = e.currentTarget;
+    const atStart = ta.selectionStart === 0 && ta.selectionEnd === 0;
+    if (e.key !== 'Backspace' || !atStart || currentPageIdx <= 0 || compositionRef.current) return;
+    e.preventDefault();
+    const prevText = pages[currentPageIdx - 1] ?? '';
+    if (!prevText) return;
+    setInlineContent(pageTextBefore(currentPageIdx - 1) + prevText.slice(0, -1) + pages.slice(currentPageIdx).join(''));
+    playDraftPageFlip('prev');
+    setCurrentPageIdx(currentPageIdx - 1);
+    pendingCaretRef.current = prevText.length - 1;
+  };
+
+  // Deleting can leave fewer pages than before. Without this the writer is stranded on a page that
+  // no longer exists: an empty box, no page controls, and typing appends to a page they cannot see.
+  useEffect(() => {
+    if (currentPageIdx <= pages.length - 1) return;
+    const target = Math.max(0, pages.length - 1);
+    playDraftPageFlip('prev');
+    setCurrentPageIdx(target);
+    pendingCaretRef.current = (pages[target] ?? '').length; // land at the end, ready to keep writing
+    setTimeout(() => textareaRef.current?.focus(), 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pages.length, currentPageIdx]);
 
   // Flip to a specific 1-indexed page of the CURRENT unsaved draft — just swaps which page's text
   // the textarea shows, so reviewing an earlier or later part of what's being written never needs
@@ -317,6 +394,7 @@ export const DiaryView: React.FC = () => {
     if (clamped === currentPageIdx + 1) return;
     playDraftPageFlip(clamped > currentPageIdx + 1 ? 'next' : 'prev');
     setCurrentPageIdx(clamped - 1);
+    pendingCaretRef.current = (pages[clamped - 1] ?? '').length;
     setTimeout(() => textareaRef.current?.focus(), 200);
   };
 
@@ -1188,8 +1266,11 @@ export const DiaryView: React.FC = () => {
                         ref={textareaRef}
                         required
                         placeholder="Viết tâm tình của bạn tại đây... Từng chữ sẽ nằm ngay ngắn trên từng dòng kẻ ✍️"
-                        value={pages[currentPageIdx] ?? ''}
+                        value={composingValue ?? pages[currentPageIdx] ?? ''}
                         onChange={handleTextareaChange}
+                        onCompositionStart={handleCompositionStart}
+                        onCompositionEnd={handleCompositionEnd}
+                        onKeyDown={handleTextareaKeyDown}
                         className="w-full border-0 font-cute text-[16px] text-zinc-800 dark:text-zinc-100 focus:ring-0 leading-[36px] resize-none selectable-text break-words break-all whitespace-pre-wrap outline-none overflow-hidden lined-notebook-text"
                         style={{
                           height: `${PAGE_VIEWPORT_HEIGHT_PX}px`,
