@@ -292,15 +292,20 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
   /** A stop wears the colour of the leg leaving it; the last stop reuses the leg arriving at it. */
   const pinColor = (i: number) => legColor(i < points.length - 1 ? i : Math.max(0, points.length - 2));
 
-  /** The km/time chip that sits on the middle of a leg, in that leg's own colour. */
+  /**
+   * The label sitting on the middle of a leg: one white rounded box, bordered in that leg's colour,
+   * with the order on the first line and the distance/time on the second.
+   * `width:max-content` matters — Leaflet gives its marker a 0-wide container, and without it the white
+   * box shrinks to nothing while the text spills onto the map.
+   */
   const legLabel = (leg: Leg, color: string, order: string) => {
-    const wrap = el(
+    const box = el(
       'div',
-      `transform:translate(-50%,-50%);display:flex;align-items:center;gap:5px;white-space:nowrap;padding:3px 9px;border-radius:999px;background:#fff;border:2px solid ${color};color:${color};font:700 11px/1.2 system-ui,sans-serif;box-shadow:0 2px 6px rgba(0,0,0,.25)`
+      `transform:translate(-50%,-50%);width:max-content;text-align:center;padding:4px 10px;border-radius:12px;background:#fff;border:2px solid ${color};box-shadow:0 2px 6px rgba(0,0,0,.25)`
     );
-    wrap.appendChild(el('span', `padding:1px 6px;border-radius:999px;background:${color};color:#fff;font:800 10px/1.4 system-ui,sans-serif`, order));
-    wrap.appendChild(el('span', 'color:#3f3f46', `${formatKm(leg.km)} · ${formatMinutes(leg.minutes)}${leg.estimated ? ' ≈' : ''}`));
-    return wrap;
+    box.appendChild(el('div', `color:${color};font:800 11px/1.3 system-ui,sans-serif;white-space:nowrap`, order));
+    box.appendChild(el('div', 'color:#3f3f46;font:700 11px/1.3 system-ui,sans-serif;white-space:nowrap', `${formatKm(leg.km)} · ${formatMinutes(leg.minutes)}${leg.estimated ? ' ≈' : ''}`));
+    return box;
   };
 
   // Draw pins, route lines and distance labels whenever anything changes.
@@ -319,22 +324,22 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
     // Each leg keeps its own colour: 1→2, 2→3, 3→4 ... never share one.
     legs.forEach((leg, i) => {
       if (!leg) return;
-      drawLeg(leg, legColor(i), `${points[i].number}→${points[i + 1].number}`, leg.estimated);
+      drawLeg(leg, legColor(i), `${points[i].number} → ${points[i + 1].number}`, leg.estimated);
     });
 
     // The live location is drawn dashed and in its own blue so it never reads as a planned leg.
     if (meAnchor && meLeg && points.length > 0) {
-      drawLeg(meLeg, ME_COLOR, `Tôi→${points[0].number}`, true);
+      drawLeg(meLeg, ME_COLOR, `Tôi → ${points[0].number}`, true);
       const meTag = el(
         'div',
-        `transform:translate(-50%,-190%);white-space:nowrap;padding:3px 9px;border-radius:999px;background:${ME_COLOR};color:#fff;font:800 11px/1.2 system-ui,sans-serif;box-shadow:0 2px 6px rgba(0,0,0,.35)`,
+        `transform:translate(-50%,-190%);width:max-content;white-space:nowrap;padding:3px 9px;border-radius:999px;background:${ME_COLOR};color:#fff;font:800 11px/1.2 system-ui,sans-serif;box-shadow:0 2px 6px rgba(0,0,0,.35)`,
         '📍 Vị trí của tôi'
       );
       adapter.addHtml(meAnchor, meTag, { z: 900 });
     }
 
     points.forEach((p, i) => {
-      const wrap = el('div', 'transform:translate(-14px,-14px);display:flex;align-items:center;gap:6px;white-space:nowrap');
+      const wrap = el('div', 'transform:translate(-14px,-14px);width:max-content;display:flex;align-items:center;gap:6px;white-space:nowrap');
       // Same colour as the leg that leaves this stop, so a pin and its outgoing line are read as one step.
       const dotColor = pinColor(i);
       wrap.appendChild(
