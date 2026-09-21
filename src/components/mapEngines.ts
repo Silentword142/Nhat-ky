@@ -17,7 +17,7 @@ export interface MapAdapter {
   resize(): void;
   /** Remove everything drawn with addLine/addHtml (the pin and "my location" survive). */
   clear(): void;
-  addLine(path: [number, number][], opts: { dashed: boolean }): void;
+  addLine(path: [number, number][], opts: { dashed: boolean; color?: string }): void;
   /** Place a DOM element on the map, anchored at its own transform. `popup` opens on click. */
   addHtml(pos: LatLng, el: HTMLElement, opts?: { z?: number; popup?: HTMLElement }): void;
   fit(points: LatLng[]): void;
@@ -29,6 +29,14 @@ export interface MapAdapter {
 
 const VN_CENTER: LatLng = { lat: 16.05, lng: 106.3 };
 const ROUTE_COLOR = '#f43f5e';
+
+/** One colour per leg so 1→2, 2→3, 3→4 ... are told apart at a glance. Index = leg order, wrapping around. */
+export const LEG_COLORS = ['#e11d48', '#7c3aed', '#059669', '#d97706', '#0891b2', '#db2777', '#4d7c0f', '#9333ea'];
+
+/** Reserved for the leg that starts at the user's live location, so it never looks like a normal leg. */
+export const ME_COLOR = '#2563eb';
+
+export const legColor = (i: number) => LEG_COLORS[((i % LEG_COLORS.length) + LEG_COLORS.length) % LEG_COLORS.length];
 
 /* ------------------------------------------------------------------ Leaflet / OpenStreetMap */
 
@@ -49,8 +57,8 @@ export const createLeafletAdapter = async (container: HTMLElement): Promise<MapA
     destroy: () => map.remove(),
     resize: () => map.invalidateSize(),
     clear: () => layer.clearLayers(),
-    addLine: (path, { dashed }) => {
-      L.polyline(path, { color: ROUTE_COLOR, weight: 5, opacity: 0.85, dashArray: dashed ? '2 10' : undefined, lineCap: 'round' }).addTo(layer);
+    addLine: (path, { dashed, color }) => {
+      L.polyline(path, { color: color || ROUTE_COLOR, weight: 5, opacity: 0.85, dashArray: dashed ? '2 10' : undefined, lineCap: 'round' }).addTo(layer);
     },
     addHtml: (pos, el, opts) => {
       const m = L.marker([pos.lat, pos.lng], {
@@ -161,14 +169,15 @@ export const createGoogleAdapter = async (container: HTMLElement, key: string): 
       drawn.splice(0).forEach((d) => d.setMap(null));
       info.close();
     },
-    addLine: (path, { dashed }) => {
+    addLine: (path, { dashed, color }) => {
+      const stroke = color || ROUTE_COLOR;
       const line = new g.Polyline({
         map,
         path: path.map(([lat, lng]) => ({ lat, lng })),
-        strokeColor: ROUTE_COLOR,
+        strokeColor: stroke,
         strokeOpacity: dashed ? 0 : 0.85,
         strokeWeight: 5,
-        icons: dashed ? [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, strokeColor: ROUTE_COLOR, scale: 3 }, offset: '0', repeat: '12px' }] : undefined,
+        icons: dashed ? [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, strokeColor: stroke, scale: 3 }, offset: '0', repeat: '12px' }] : undefined,
       });
       drawn.push(line);
     },

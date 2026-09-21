@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, MapPinOff, ExternalLink, LocateFixed, KeyRound } from 'lucide-react';
+import { Loader2, MapPinOff, ExternalLink, LocateFixed, KeyRound, X } from 'lucide-react';
 import { PlanStop } from '../types';
 import { LatLng } from '../utils/maps';
 import { PlacePickButton } from './PlaceTools';
-import { useMapAdapter } from './mapEngines';
+import { MapAdapter, ME_COLOR, legColor, useMapAdapter } from './mapEngines';
 import { getBuildTimeGoogleMapsKey } from '../services/googleMaps';
 import { Leg, Vehicle, VEHICLES, formatKm, formatMinutes, geocodePlace, getCachedGeocode, getLeg, looksLikeUrl } from '../services/routing';
 
@@ -124,8 +124,15 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
   const [meMsg, setMeMsg] = useState('');
   const meRef = useRef(me);
   meRef.current = me;
-  const showMeRef = useRef(showMe);
-  showMeRef.current = showMe;
+  // Rounded to ~11 m so a walking GPS jitter doesn't re-route and re-draw on every tick.
+  const meKey = showMe && me ? `${me.lat.toFixed(4)},${me.lng.toFixed(4)}` : '';
+  const meAnchor = useMemo<LatLng | null>(() => {
+    if (!meKey) return null;
+    const [lat, lng] = meKey.split(',').map(Number);
+    return { lat, lng };
+  }, [meKey]);
+  const [meLeg, setMeLeg] = useState<Leg | null>(null);
+  const lastFitRef = useRef<{ adapter: MapAdapter | null; key: string }>({ adapter: null, key: '' });
 
   const pickVehicle = (v: Vehicle) => {
     setVehicle(v);
@@ -199,6 +206,23 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pointSignature, vehicle]);
 
+  // Live location -> stop 1, so "my location" joins the route instead of floating next to it.
+  useEffect(() => {
+    let cancelled = false;
+    const first = points[0]?.pos;
+    if (!meAnchor || !first) {
+      setMeLeg(null);
+      return;
+    }
+    getLeg(meAnchor, first, vehicle).then((leg) => {
+      if (!cancelled) setMeLeg(leg);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meAnchor, pointSignature, vehicle]);
+
   // The container can be 0-wide while a modal animates in or a tab is hidden; fitting then picks a wrong
   // zoom. Re-measure and re-fit as soon as it gets a real size.
   useEffect(() => {
@@ -248,32 +272,58 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
     adapter?.setMe(showMe && me ? { lat: me.lat, lng: me.lng } : null, me?.acc);
   }, [adapter, me, showMe]);
 
+  /** A stop wears the colour of the leg leaving it; the last stop reuses the leg arriving at it. */
+  const pinColor = (i: number) => legColor(i < points.length - 1 ? i : Math.max(0, points.length - 2));
+
+  /** The km/time chip that sits on the middle of a leg, in that leg's own colour. */
+  const legLabel = (leg: Leg, color: string, order: string) => {
+    const wrap = el(
+      'div',
+      `transform:translate(-50%,-50%);display:flex;align-items:center;gap:5px;white-space:nowrap;padding:3px 9px;border-radius:999px;background:#fff;border:2px solid ${color};color:${color};font:700 11px/1.2 system-ui,sans-serif;box-shadow:0 2px 6px rgba(0,0,0,.25)`
+    );
+    wrap.appendChild(el('span', `padding:1px 6px;border-radius:999px;background:${color};color:#fff;font:800 10px/1.4 system-ui,sans-serif`, order));
+    wrap.appendChild(el('span', 'color:#3f3f46', `${VEHICLES[vehicle].emoji} ${formatKm(leg.km)} · ${formatMinutes(leg.minutes)}${leg.estimated ? ' ≈' : ''}`));
+    return wrap;
+  };
+
   // Draw pins, route lines and distance labels whenever anything changes.
   useEffect(() => {
     if (!adapter) return;
     adapter.clear();
     const view: LatLng[] = [];
 
-    legs.forEach((leg) => {
-      if (!leg) return;
-      adapter.addLine(leg.geometry, { dashed: leg.estimated });
+    const drawLeg = (leg: Leg, color: string, order: string, dashed: boolean) => {
+      adapter.addLine(leg.geometry, { dashed, color });
       leg.geometry.forEach(([lat, lng]) => view.push({ lat, lng }));
-
       const [midLat, midLng] = leg.geometry[Math.floor(leg.geometry.length / 2)];
-      const label = el(
-        'div',
-        'transform:translate(-50%,-50%);white-space:nowrap;padding:3px 9px;border-radius:999px;background:#fff;border:2px solid #f43f5e;color:#be123c;font:700 11px/1.2 system-ui,sans-serif;box-shadow:0 2px 6px rgba(0,0,0,.25)',
-        `${VEHICLES[vehicle].emoji} ${formatKm(leg.km)} · ${formatMinutes(leg.minutes)}${leg.estimated ? ' ≈' : ''}`
-      );
-      adapter.addHtml({ lat: midLat, lng: midLng }, label, { z: 500 });
+      adapter.addHtml({ lat: midLat, lng: midLng }, legLabel(leg, color, order), { z: 500 });
+    };
+
+    // Each leg keeps its own colour: 1→2, 2→3, 3→4 ... never share one.
+    legs.forEach((leg, i) => {
+      if (!leg) return;
+      drawLeg(leg, legColor(i), `${points[i].number}→${points[i + 1].number}`, leg.estimated);
     });
 
-    points.forEach((p) => {
+    // The live location is drawn dashed and in its own blue so it never reads as a planned leg.
+    if (meAnchor && meLeg && points.length > 0) {
+      drawLeg(meLeg, ME_COLOR, `Tôi→${points[0].number}`, true);
+      const meTag = el(
+        'div',
+        `transform:translate(-50%,-190%);white-space:nowrap;padding:3px 9px;border-radius:999px;background:${ME_COLOR};color:#fff;font:800 11px/1.2 system-ui,sans-serif;box-shadow:0 2px 6px rgba(0,0,0,.35)`,
+        '📍 Vị trí của tôi'
+      );
+      adapter.addHtml(meAnchor, meTag, { z: 900 });
+    }
+
+    points.forEach((p, i) => {
       const wrap = el('div', 'transform:translate(-14px,-14px);display:flex;align-items:center;gap:6px;white-space:nowrap');
+      // Same colour as the leg that leaves this stop, so a pin and its outgoing line are read as one step.
+      const dotColor = pinColor(i);
       wrap.appendChild(
         el(
           'div',
-          `width:28px;height:28px;border-radius:50%;background:${p.approx ? '#fb923c' : '#e11d48'};color:#fff;border:3px solid #fff;display:flex;align-items:center;justify-content:center;font:800 13px/1 system-ui,sans-serif;box-shadow:0 2px 6px rgba(0,0,0,.4);flex:none`,
+          `width:28px;height:28px;border-radius:50%;background:${dotColor};color:#fff;border:3px solid ${p.approx ? '#f97316' : '#fff'};display:flex;align-items:center;justify-content:center;font:800 13px/1 system-ui,sans-serif;box-shadow:0 2px 6px rgba(0,0,0,.4);flex:none`,
           String(p.number)
         )
       );
@@ -295,28 +345,37 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
       view.push(p.pos);
     });
 
-    if (showMeRef.current && meRef.current) view.push({ lat: meRef.current.lat, lng: meRef.current.lng });
-    adapter.fit(view);
-  }, [adapter, points, legs, vehicle, fitTick]);
+    if (meAnchor) view.push(meAnchor);
+
+    // Only re-frame when the route itself changes (or the user asks): walking around must not keep snapping the map.
+    const fitKey = `${pointSignature}|${legs.length}|${meAnchor ? 'me' : ''}|${fitTick}`;
+    if (lastFitRef.current.adapter !== adapter || lastFitRef.current.key !== fitKey) {
+      lastFitRef.current = { adapter, key: fitKey };
+      adapter.fit(view);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adapter, points, legs, vehicle, fitTick, meAnchor, meLeg]);
 
   const totalKm = legs.reduce((s, l) => s + (l?.km || 0), 0);
   const totalMin = legs.reduce((s, l) => s + (l?.minutes || 0), 0);
   const anyEstimated = legs.some((l) => l?.estimated);
 
-  // Whole day as one Google Maps route (Maps URLs take up to 9 waypoints).
+  // Whole day as one Google Maps route, in itinerary order (Maps URLs take up to 9 waypoints).
+  // With "my location" on, the route starts where the user actually is.
   const googleDayUrl = useMemo(() => {
-    if (points.length < 2) return null;
-    const pts = points.slice(0, 10);
-    const f = (p: Point) => `${p.pos.lat},${p.pos.lng}`;
+    const coords = points.map((p) => `${p.pos.lat},${p.pos.lng}`);
+    if (meAnchor) coords.unshift(`${meAnchor.lat},${meAnchor.lng}`);
+    if (coords.length < 2) return null;
+    const pts = coords.slice(0, 10);
     const params = new URLSearchParams({
       api: '1',
-      origin: f(pts[0]),
-      destination: f(pts[pts.length - 1]),
+      origin: pts[0],
+      destination: pts[pts.length - 1],
       travelmode: VEHICLES[vehicle].googleMode,
     });
-    if (pts.length > 2) params.set('waypoints', pts.slice(1, -1).map(f).join('|'));
+    if (pts.length > 2) params.set('waypoints', pts.slice(1, -1).join('|'));
     return `https://www.google.com/maps/dir/?${params.toString()}`;
-  }, [points, vehicle]);
+  }, [points, vehicle, meAnchor]);
 
   return (
     <div className="rounded-2xl border border-zinc-200 dark:border-zinc-700 overflow-hidden bg-white dark:bg-zinc-900 flex flex-col">
@@ -374,30 +433,62 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
             <Loader2 className="w-3 h-3 animate-spin" /> Đang tính đường đi...
           </div>
         )}
-        <button
-          type="button"
-          onClick={() => setShowMe((v) => !v)}
-          className={`absolute bottom-3 right-3 z-[500] rounded-full shadow px-3 py-1.5 text-[11px] font-bold flex items-center gap-1.5 transition ${
-            showMe ? 'bg-blue-500 text-white' : 'bg-white/95 dark:bg-zinc-900/95 text-blue-600 dark:text-blue-400'
-          }`}
-          title="Hiện vị trí hiện tại của tôi"
-        >
-          <LocateFixed className="w-3.5 h-3.5" /> {showMe ? 'Đang hiện vị trí của tôi' : 'Vị trí của tôi'}
-        </button>
+        <div className="absolute bottom-3 right-3 z-[500] flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              if (!showMe) {
+                setShowMe(true);
+                return;
+              }
+              const m = meRef.current;
+              if (m && adapter) adapter.flyTo({ lat: m.lat, lng: m.lng }, 16); // press again = jump back to where I am
+              else setFitTick((t) => t + 1);
+            }}
+            className={`rounded-full shadow px-3 py-1.5 text-[11px] font-bold flex items-center gap-1.5 transition ${
+              showMe ? 'bg-blue-500 text-white' : 'bg-white/95 dark:bg-zinc-900/95 text-blue-600 dark:text-blue-400'
+            }`}
+            title={showMe ? 'Đưa bản đồ về vị trí hiện tại của tôi' : 'Hiện vị trí hiện tại của tôi'}
+          >
+            <LocateFixed className="w-3.5 h-3.5" /> {showMe ? 'Về vị trí của tôi' : 'Vị trí của tôi'}
+          </button>
+          {showMe && (
+            <button
+              type="button"
+              onClick={() => setShowMe(false)}
+              title="Ẩn vị trí của tôi"
+              className="rounded-full shadow w-7 h-7 flex items-center justify-center bg-white/95 dark:bg-zinc-900/95 text-zinc-500 dark:text-zinc-400 hover:text-red-500 transition"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
       </div>
       {meMsg && <p className="px-3 pt-2 text-[11px] text-zinc-500 dark:text-zinc-400">{meMsg}</p>}
 
       {/* Route summary */}
       <div className="p-3 space-y-2.5">
-        {legs.length > 0 && (
+        {(legs.length > 0 || (meLeg && points.length > 0)) && (
           <>
             <ul className="space-y-1">
+              {meLeg && points.length > 0 && (
+                <li className="flex items-center justify-between gap-2 text-xs">
+                  <span className="min-w-0 truncate text-zinc-600 dark:text-zinc-300">
+                    <span className="inline-block w-3 h-1.5 rounded-full mr-1.5 align-middle" style={{ backgroundColor: ME_COLOR }} />
+                    <b style={{ color: ME_COLOR }}>Vị trí của tôi</b> <span className="text-zinc-400">→</span> <b style={{ color: pinColor(0) }}>{points[0].number}</b> {points[0].stop.title}
+                  </span>
+                  <span className="shrink-0 font-bold text-zinc-800 dark:text-zinc-100 tabular-nums">
+                    {formatKm(meLeg.km)} · {formatMinutes(meLeg.minutes)}
+                  </span>
+                </li>
+              )}
               {legs.map((leg, i) =>
                 leg ? (
                   <li key={i} className="flex items-center justify-between gap-2 text-xs">
                     <span className="min-w-0 truncate text-zinc-600 dark:text-zinc-300">
-                      <b className="text-rose-500">{points[i].number}</b> {points[i].stop.title} <span className="text-zinc-400">→</span> <b className="text-rose-500">{points[i + 1].number}</b>{' '}
-                      {points[i + 1].stop.title}
+                      <span className="inline-block w-3 h-1.5 rounded-full mr-1.5 align-middle" style={{ backgroundColor: legColor(i) }} />
+                      <b style={{ color: pinColor(i) }}>{points[i].number}</b> {points[i].stop.title} <span className="text-zinc-400">→</span>{' '}
+                      <b style={{ color: pinColor(i + 1) }}>{points[i + 1].number}</b> {points[i + 1].stop.title}
                     </span>
                     <span className="shrink-0 font-bold text-zinc-800 dark:text-zinc-100 tabular-nums">
                       {formatKm(leg.km)} · {formatMinutes(leg.minutes)}
@@ -406,12 +497,15 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
                 ) : null
               )}
             </ul>
+            {legs.length > 0 && (
             <div className="flex items-center justify-between pt-2 border-t border-zinc-100 dark:border-zinc-800 text-xs">
               <span className="font-bold text-zinc-500 dark:text-zinc-400">Tổng ngày {day}</span>
               <span className="font-extrabold text-rose-600 dark:text-rose-400 tabular-nums">
                 {formatKm(totalKm)} · {formatMinutes(totalMin)}
               </span>
             </div>
+            )}
+            <p className="text-[11px] text-zinc-400">Các chặng nối theo đúng thứ tự thời gian trong lịch trình (1→2, 2→3…), mỗi chặng một màu riêng.</p>
             {anyEstimated && <p className="text-[11px] text-amber-600 dark:text-amber-400">≈ Một số đoạn chưa tính được đường thật nên đang ước tính theo đường chim bay.</p>}
           </>
         )}
@@ -423,12 +517,12 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
             rel="noopener noreferrer"
             className="w-full py-2 rounded-xl bg-blue-500 hover:bg-blue-600 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition"
           >
-            <ExternalLink className="w-3.5 h-3.5" /> Mở cả ngày {day} trên Google Maps
+            <ExternalLink className="w-3.5 h-3.5" /> {meAnchor ? `Đi từ vị trí của tôi theo lịch ngày ${day}` : `Mở cả ngày ${day} trên Google Maps`}
           </a>
         )}
 
         {points.some((p) => p.approx) && (
-          <p className="text-[11px] text-orange-600 dark:text-orange-400">🟠 Ghim màu cam được tự tìm theo tên địa điểm; bấm "Bản đồ" ở hoạt động để ghim chính xác.</p>
+          <p className="text-[11px] text-orange-600 dark:text-orange-400">🟠 Ghim có viền cam được tự tìm theo tên địa điểm; bấm "Bản đồ" ở hoạt động để ghim chính xác.</p>
         )}
 
         {unlocated.length > 0 && (
