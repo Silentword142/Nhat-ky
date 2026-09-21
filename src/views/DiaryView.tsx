@@ -62,6 +62,20 @@ const QUICK_REACTIONS = ['❤️', '🥰', '🫂', '💋', '💌', '🌸'];
 // handleSavePage: still a single saved record per day, `pages` below just displays inlineContent
 // one leaf at a time) — typing past line 15 snaps to a fresh page with a flip, matching the
 // original notebook feel; Trang Trước/Sau just swaps which leaf is shown, no save needed.
+/** Every record of one date, joined into the single continuous text that day is. */
+const buildDayDraft = (entries: DiaryEntry[]) =>
+  entries
+    .map((entry, i) => {
+      const title = (entry.title || '').trim();
+      const content = (entry.content || '').trim();
+      // The first record's title stays the day's title; a later one would simply be lost, so it
+      // is folded into the text as its own line instead.
+      const heading = i > 0 && title && title !== 'Tiêu đề' ? `${title}\n` : '';
+      return heading + content;
+    })
+    .filter((part) => part.length > 0)
+    .join('\n\n');
+
 const MAX_LINES_PER_PAGE = 15;
 const NOTEBOOK_LINE_HEIGHT_PX = 36;
 const PAGE_VIEWPORT_HEIGHT_PX = MAX_LINES_PER_PAGE * NOTEBOOK_LINE_HEIGHT_PX;
@@ -130,8 +144,10 @@ export const DiaryView: React.FC = () => {
   const isTurningPageRef = useRef(false);
   // Records of the open day folded into the current draft; removed once the draft is saved.
   const mergedAwayIdsRef = useRef<string[]>([]);
-  // Set when the writer should land at the end of the day's existing text instead of its first leaf.
-  const openAtEndRef = useRef(false);
+  // Which leaf the writer should open on: a leaf index, 'end' for the end of the day's text, or
+  // null for its first leaf. Reading and writing use the same leaves, so "edit" lands on the leaf
+  // that was on screen.
+  const openAtLeafRef = useRef<number | 'end' | null>(null);
 
   // Editor State
   const [inlineTitle, setInlineTitle] = useState('');
@@ -186,8 +202,15 @@ export const DiaryView: React.FC = () => {
       });
   }, [diaries, selectedDate]);
 
-  // Current page entry of the day
-  const currentDayEntry: DiaryEntry | undefined = selectedDayEntries[dayPageIndex];
+  // The day's record. A day is one text now, and dayPageIndex counts the LEAVES of that text,
+  // so the record is never looked up by it.
+  const currentDayEntry: DiaryEntry | undefined = selectedDayEntries[0];
+
+  // Photos of the whole day (a day that still has several records shows all of them together).
+  const dayPhotos = useMemo(
+    () => Array.from(new Set(selectedDayEntries.flatMap((e) => (Array.isArray(e.photos) ? e.photos : [])))),
+    [selectedDayEntries]
+  );
 
   // Whenever selectedDate changes, reset day page index & mode. Deliberately NOT keyed on
   // selectedDayEntries.length: every addDiary/updateDiary/deleteDiary call on the CURRENT day
@@ -198,7 +221,7 @@ export const DiaryView: React.FC = () => {
   useEffect(() => {
     setDayPageIndex(0);
     mergedAwayIdsRef.current = [];
-    openAtEndRef.current = false;
+    openAtLeafRef.current = null;
     if (selectedDayEntries.length > 0) {
       setPageMode('view');
       setEditingEntryId(null);
@@ -275,12 +298,12 @@ export const DiaryView: React.FC = () => {
     return { fits: text.slice(0, cut), overflow: text.slice(cut) };
   };
 
-  // The full draft re-chunked into 15-line pages, recomputed whenever the content changes. Pure
-  // partitioning — pages.join('') always reconstructs inlineContent exactly.
-  const pages = useMemo(() => {
-    if (!mirrorRef.current) return [inlineContent];
+  // Any text re-chunked into 15-line leaves. Pure partitioning — the result always joins back to
+  // exactly the text that went in.
+  const splitIntoPages = (text: string): string[] => {
+    if (!mirrorRef.current) return [text];
     const result: string[] = [];
-    let remaining = inlineContent;
+    let remaining = text;
     // Safety cap so a pathological input can't loop forever; a real diary entry won't come close.
     for (let i = 0; i < 500 && remaining.length > 0; i++) {
       const { fits, overflow } = splitOnePage(remaining, MAX_LINES_PER_PAGE);
@@ -288,8 +311,21 @@ export const DiaryView: React.FC = () => {
       remaining = overflow;
     }
     return result.length > 0 ? result : [''];
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inlineContent, mirrorReadyTick]);
+  };
+
+  // The draft being written, one leaf at a time.
+  const pages = useMemo(() => splitIntoPages(inlineContent), [inlineContent, mirrorReadyTick]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The same day, read back: reading is paginated by the exact same measurement as writing, so a
+  // page break lands on the same word in both — no two written leaves shown as one.
+  const dayText = useMemo(() => buildDayDraft(selectedDayEntries), [selectedDayEntries]);
+  const viewPages = useMemo(() => splitIntoPages(dayText), [dayText, mirrorReadyTick, pageMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  const viewPageCount = viewPages.length;
+
+  // Text can shrink (an edit, the partner's sync): never leave the reader on a leaf that is gone.
+  useEffect(() => {
+    if (dayPageIndex > viewPageCount - 1) setDayPageIndex(Math.max(0, viewPageCount - 1));
+  }, [viewPageCount, dayPageIndex]);
 
   const playDraftPageFlip = (direction: 'next' | 'prev') => {
     soundService.playPaperOpen();
@@ -503,12 +539,12 @@ export const DiaryView: React.FC = () => {
 
   // Page Turns WITHIN the Selected Day's Pages
   const handleTurnNextDayPage = () => {
-    if (dayPageIndex < selectedDayEntries.length - 1 && !isFlipping) {
+    if (dayPageIndex < viewPageCount - 1 && !isFlipping) {
       soundService.playPaperOpen();
       setIsFlipping(true);
       setPageTurnDirection('next');
       setTimeout(() => {
-        setDayPageIndex((prev) => Math.min(prev + 1, Math.max(0, selectedDayEntries.length - 1)));
+        setDayPageIndex((prev) => Math.min(prev + 1, Math.max(0, viewPageCount - 1)));
         setPageMode('view');
         setEditingEntryId(null);
         setIsFlipping(false);
@@ -543,7 +579,7 @@ export const DiaryView: React.FC = () => {
       if (selectedDayEntries.length > 0) {
         // Never start a disconnected blank page: carry on at the end of this day's own writing,
         // so a new leaf is part of the same text and erasing it walks back to the leaf before.
-        openDayForWriting(true);
+        openDayForWriting('end');
       } else {
         setPageMode('write');
         setEditingEntryId(null);
@@ -569,20 +605,7 @@ export const DiaryView: React.FC = () => {
   // own blank writer, so erasing a page could not walk back into the page before it. Opening a day
   // for writing folds every record of that date into a single draft; saving keeps the first record
   // and removes the ones folded in, so from then on the day really is one linked text.
-  const buildDayDraft = (entries: DiaryEntry[]) =>
-    entries
-      .map((entry, i) => {
-        const title = (entry.title || '').trim();
-        const content = (entry.content || '').trim();
-        // The first record's title stays the day's title; a later one would simply be lost, so it
-        // is folded into the text as its own line instead.
-        const heading = i > 0 && title && title !== 'Tiêu đề' ? `${title}\n` : '';
-        return heading + content;
-      })
-      .filter((part) => part.length > 0)
-      .join('\n\n');
-
-  const openDayForWriting = (atEnd: boolean) => {
+  const openDayForWriting = (openAt: number | 'end' | null) => {
     const entries = selectedDayEntries;
     const first = entries[0];
     setPageMode('write');
@@ -597,25 +620,27 @@ export const DiaryView: React.FC = () => {
     setInlineMood(MOODS.find((m) => m.emoji === first?.mood) || MOODS[0]);
     setInlineWeather(WEATHERS.find((w) => w.emoji === first?.weather) || WEATHERS[0]);
     setCurrentPageIdx(0);
-    openAtEndRef.current = atEnd;
+    openAtLeafRef.current = openAt;
   };
 
-  // "Write on" opens the day at the end of what is already written, on its last leaf.
+  // Once the draft's leaves are measured, jump to the one the writer asked for: the end of the
+  // day's text ("write on"), or the very leaf that was being read ("edit").
   useEffect(() => {
-    if (!openAtEndRef.current || pageMode !== 'write' || !mirrorRef.current) return;
-    openAtEndRef.current = false;
-    const last = Math.max(0, pages.length - 1);
-    setCurrentPageIdx(last);
-    pendingCaretRef.current = (pages[last] ?? '').length;
+    const target = openAtLeafRef.current;
+    if (target === null || pageMode !== 'write' || !mirrorRef.current) return;
+    openAtLeafRef.current = null;
+    const idx = Math.max(0, Math.min(target === 'end' ? pages.length - 1 : target, pages.length - 1));
+    setCurrentPageIdx(idx);
+    pendingCaretRef.current = (pages[idx] ?? '').length;
     setTimeout(() => textareaRef.current?.focus(), 60);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pages, pageMode]);
 
-  // Start editing this day — the whole day, not just the record that was clicked.
+  // Start editing this day — the whole day, opened on the leaf being read.
   const handleStartEditPage = (entry: DiaryEntry) => {
     if (!entry) return;
     soundService.playPop();
-    openDayForWriting(false);
+    openDayForWriting(dayPageIndex);
   };
 
   // Photo upload with fast compression
@@ -862,7 +887,7 @@ export const DiaryView: React.FC = () => {
               // ended instead of starting a separate blank page.
               if (selectedDayEntries.length > 0) {
                 soundService.playPop();
-                openDayForWriting(true);
+                openDayForWriting('end');
               } else {
                 handleAddNewPageForThisDay();
               }
@@ -1105,7 +1130,7 @@ export const DiaryView: React.FC = () => {
                   Tập ngày: {formatDisplayDate(selectedDate)}
                 </span>
                 <span className="text-rose-500 font-bold text-[11px]">
-                  {selectedDayEntries.length} trang đã viết
+                  {selectedDayEntries.length === 0 ? 0 : viewPageCount} trang đã viết
                 </span>
               </div>
 
@@ -1146,7 +1171,7 @@ export const DiaryView: React.FC = () => {
             {/* Notebook Page Leaf */}
             <div className="relative rounded-[28px] bg-[#fffdf9] dark:bg-[#1a171f] shadow-2xl min-h-[760px] flex flex-col justify-between overflow-hidden border border-[#ecdac8] dark:border-zinc-800 p-5 sm:p-8">
               {/* Turn.js Interactive Dog-Ear Corner Peel on Bottom-Right */}
-              {pageMode === 'view' && selectedDayEntries.length > 1 && dayPageIndex < selectedDayEntries.length - 1 && (
+              {pageMode === 'view' && dayPageIndex < viewPageCount - 1 && (
                 <div
                   onClick={handleTurnNextDayPage}
                   className="dog-ear-corner-right"
@@ -1216,7 +1241,7 @@ export const DiaryView: React.FC = () => {
 
                   <button
                     onClick={handleTurnPrevDayPage}
-                    disabled={dayPageIndex === 0 || selectedDayEntries.length === 0}
+                    disabled={dayPageIndex === 0 || viewPageCount === 0}
                     className="p-1.5 sm:px-2.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 hover:bg-rose-100 disabled:opacity-30 disabled:pointer-events-none transition flex items-center gap-1 font-bold text-xs cursor-pointer"
                     title="Lật sang trang trước của ngày này"
                   >
@@ -1226,7 +1251,7 @@ export const DiaryView: React.FC = () => {
 
                   <button
                     onClick={handleTurnNextDayPage}
-                    disabled={dayPageIndex >= selectedDayEntries.length - 1 || selectedDayEntries.length === 0}
+                    disabled={dayPageIndex >= viewPageCount - 1 || viewPageCount === 0}
                     className="p-1.5 sm:px-2.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 hover:bg-rose-100 disabled:opacity-30 disabled:pointer-events-none transition flex items-center gap-1 font-bold text-xs cursor-pointer"
                     title="Lật sang trang sau của ngày này"
                   >
@@ -1537,7 +1562,7 @@ export const DiaryView: React.FC = () => {
                   /* B. VIEWING MODE (SYNCHRONIZED WITH WRITING MODE)                */
                   /* =============================================================== */
                   <motion.div
-                    key={currentDayEntry.id}
+                    key={`${currentDayEntry.id}-${dayPageIndex}`}
                     initial={{
                       rotateY: pageTurnDirection === 'next' ? 60 : -60,
                       opacity: 0,
@@ -1559,53 +1584,93 @@ export const DiaryView: React.FC = () => {
                     {/* Synchronized Title Header Line */}
                     <div className="border-b-2 border-rose-300 dark:border-zinc-700 pb-1">
                       <h3 className="w-full font-romantic font-bold text-xl sm:text-2xl text-rose-600 dark:text-rose-400 break-words">
-                        {currentDayEntry.title || 'Trang nhật ký'}
+                        {currentDayEntry.title || 'Trang nhật ký'}{viewPageCount > 1 ? ` (trang ${dayPageIndex + 1}/${viewPageCount})` : ''}
                       </h3>
                     </div>
 
-                    {/* Synchronized Ruled Notebook Lines Display */}
-                    <div className="relative rounded-2xl p-4 sm:p-5 lined-notebook-text border border-[#ecdac8] dark:border-zinc-800 shadow-inner min-h-[500px] sm:min-h-[600px] overflow-hidden">
-                      <div className="pl-8 sm:pl-10 space-y-0">
-                        {(currentDayEntry.content || '').split('\n').map((paragraph, pIdx) => (
-                          <p
-                            key={pIdx}
-                            className="font-cute text-[16px] text-zinc-800 dark:text-zinc-100 selectable-text leading-[36px] break-words break-all whitespace-pre-wrap"
-                            style={{
-                              lineHeight: '36px',
-                              wordBreak: 'break-word',
-                              overflowWrap: 'anywhere',
-                              whiteSpace: 'pre-wrap',
-                            }}
-                          >
-                            {paragraph || '\u00A0'}
-                          </p>
-                        ))}
+                    {/* Ruled leaf — same width, padding, font and 36px rules as the writer, and fed by
+                        the same splitter, so leaf 2 of the reader is exactly leaf 2 of the writer. */}
+                    <div className="relative rounded-2xl border border-[#ecdac8] dark:border-zinc-800 shadow-inner overflow-hidden bg-[#fffdf9] dark:bg-[#1a171f] pt-4">
+                      {/* The measuring twin (see the writer's copy) — only one of the two modes is
+                          ever mounted, so a single ref serves both. */}
+                      <div
+                        ref={mirrorRef}
+                        aria-hidden="true"
+                        className="invisible absolute top-0 left-0 right-0 font-cute text-[16px] break-words break-all whitespace-pre-wrap pointer-events-none"
+                        style={{
+                          lineHeight: '36px',
+                          wordBreak: 'break-word',
+                          overflowWrap: 'anywhere',
+                          whiteSpace: 'pre-wrap',
+                          paddingLeft: '60px',
+                          paddingRight: '20px',
+                          height: 'auto',
+                        }}
+                      />
+                      <div
+                        className="font-cute text-[16px] text-zinc-800 dark:text-zinc-100 selectable-text break-words break-all whitespace-pre-wrap lined-notebook-text"
+                        style={{
+                          height: `${PAGE_VIEWPORT_HEIGHT_PX}px`,
+                          lineHeight: '36px',
+                          wordBreak: 'break-word',
+                          overflowWrap: 'anywhere',
+                          whiteSpace: 'pre-wrap',
+                          paddingTop: 0,
+                          paddingBottom: 0,
+                          paddingLeft: '60px',
+                          paddingRight: '20px',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {viewPages[dayPageIndex] ?? ''}
                       </div>
+
+                      {viewPageCount > 1 && (
+                        <div className="absolute bottom-2 right-4 flex items-center gap-1 bg-white/80 dark:bg-zinc-800/80 px-1.5 py-1 rounded-full border border-rose-100 dark:border-zinc-700 shadow-xs select-none">
+                          <button
+                            type="button"
+                            onClick={handleTurnPrevDayPage}
+                            disabled={dayPageIndex <= 0}
+                            className="p-0.5 rounded-full text-zinc-500 hover:text-rose-500 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
+                            title="Lật về trang trước"
+                          >
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="text-[10px] font-bold text-zinc-500 px-0.5">
+                            Trang {dayPageIndex + 1}/{viewPageCount}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleTurnNextDayPage}
+                            disabled={dayPageIndex >= viewPageCount - 1}
+                            className="p-0.5 rounded-full text-zinc-500 hover:text-rose-500 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
+                            title="Lật sang trang sau"
+                          >
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
                     </div>
 
-                    {/* Attached Photos in View Mode */}
-                    {Array.isArray(currentDayEntry.photos) && currentDayEntry.photos.length > 0 && (
+                    {/* Attached Photos in View Mode — on the last leaf, like an album at the end */}
+                    {dayPageIndex === viewPageCount - 1 && dayPhotos.length > 0 && (
                       <div className="space-y-2 pt-1">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
                             <ImageIcon className="w-4 h-4 text-rose-500" />
-                            <span>Ảnh đính kèm ({currentDayEntry.photos.length} ảnh):</span>
+                            <span>Ảnh đính kèm ({dayPhotos.length} ảnh):</span>
                           </span>
                         </div>
 
                         <div
                           className={`grid gap-2.5 pt-1 ${
-                            currentDayEntry.photos.length === 1
-                              ? 'grid-cols-1 max-w-xs'
-                              : currentDayEntry.photos.length === 2
-                              ? 'grid-cols-2 max-w-md'
-                              : 'grid-cols-2 sm:grid-cols-4'
+                            dayPhotos.length === 1 ? 'grid-cols-1 max-w-xs' : dayPhotos.length === 2 ? 'grid-cols-2 max-w-md' : 'grid-cols-2 sm:grid-cols-4'
                           }`}
                         >
-                          {currentDayEntry.photos.map((photoUrl, idx) => (
+                          {dayPhotos.map((photoUrl, idx) => (
                             <div
                               key={idx}
-                              onClick={() => handleOpenPhotoZoom(currentDayEntry.photos, idx, currentDayEntry)}
+                              onClick={() => handleOpenPhotoZoom(dayPhotos, idx, currentDayEntry)}
                               className="group relative aspect-square rounded-2xl overflow-hidden cursor-pointer shadow-md bg-zinc-100 dark:bg-zinc-800 hover:shadow-xl transition-all duration-300 border-2 border-white dark:border-zinc-700"
                             >
                               <img
