@@ -1198,6 +1198,9 @@ export const SettingsView: React.FC = () => {
           <h3 className="text-base sm:text-lg font-bold text-zinc-800 dark:text-zinc-100 font-cute">
             Tùy Chỉnh Chủ Đề & Giao Diện
           </h3>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-semibold">
+            Chỉ áp dụng cho tài khoản này
+          </span>
         </div>
 
         {/* Theme Palette Cards */}

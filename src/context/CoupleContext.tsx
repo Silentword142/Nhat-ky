@@ -128,6 +128,20 @@ export const CoupleContext = createContext<CoupleContextType | undefined>(undefi
 
 const STORAGE_KEY_PREFIX = 'lovesync_cloud_v2_';
 
+/**
+ * Settings that describe how the app LOOKS to the person holding this device. They stay on this
+ * account only: never sent to the room, never taken from it — so changing the background (or the
+ * dark mode the settings screen already promises is per-device) leaves the partner's app alone.
+ * Everything else in settings — the love date, cycle tracking, the shared photo folder — is shared.
+ */
+const PERSONAL_SETTING_KEYS = ['theme', 'isDarkMode'] as const;
+
+const stripPersonalSettings = <T extends Record<string, unknown>>(settings: T): T => {
+  const shared = { ...settings };
+  PERSONAL_SETTING_KEYS.forEach((key) => delete shared[key]);
+  return shared;
+};
+
 // Firestore documents are capped at 1MiB. Inline base64 image data (data: URLs) from an
 // unsynced ORIGINAL-quality photo (photos are meant to go to Google Drive instead — see
 // PhotoAlbumView) can blow past that instantly and silently break realtime sync for the
@@ -782,7 +796,8 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // 5. Sync Settings
       if (data.settings && typeof data.settings === 'object') {
         setSettingsState((prev) => {
-          const merged = { ...prev, ...data.settings, roomCode: prev.roomCode };
+          // The partner's look-and-feel is dropped here, so their theme never overrides this one.
+          const merged = { ...prev, ...stripPersonalSettings(data.settings), roomCode: prev.roomCode };
           try {
             localStorage.setItem(`${STORAGE_KEY_PREFIX}settings`, JSON.stringify(merged));
           } catch {}
@@ -1348,7 +1363,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           cards,
           anniversaries,
           plans,
-          settings: { ...settings, roomCode: cleanCode },
+          settings: { ...stripPersonalSettings(settings), roomCode: cleanCode },
           profiles: {
             [myUserId]: { ...myProfileRef.current, id: myUserId, lastActive: Date.now() },
           },
@@ -1555,7 +1570,9 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         try {
           localStorage.setItem(`${STORAGE_KEY_PREFIX}settings`, JSON.stringify(updated));
         } catch {}
-        broadcastRoomChanges({ settings: updated });
+        // How the app LOOKS belongs to whoever is holding the phone, so it is kept out of the room:
+        // picking a background never repaints the partner's app (see PERSONAL_SETTING_KEYS).
+        broadcastRoomChanges({ settings: stripPersonalSettings(updated) });
         return updated;
       });
     },
@@ -2026,7 +2043,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           cards: parsed.cards || [],
           anniversaries: parsed.anniversaries || [],
           plans: parsed.plans || [],
-          settings: parsed.settings || {},
+          settings: stripPersonalSettings(parsed.settings || {}),
         });
         return true;
       } catch (err) {
