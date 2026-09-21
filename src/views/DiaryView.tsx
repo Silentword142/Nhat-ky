@@ -128,6 +128,10 @@ export const DiaryView: React.FC = () => {
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [isFlipping, setIsFlipping] = useState(false);
   const isTurningPageRef = useRef(false);
+  // Records of the open day folded into the current draft; removed once the draft is saved.
+  const mergedAwayIdsRef = useRef<string[]>([]);
+  // Set when the writer should land at the end of the day's existing text instead of its first leaf.
+  const openAtEndRef = useRef(false);
 
   // Editor State
   const [inlineTitle, setInlineTitle] = useState('');
@@ -193,6 +197,8 @@ export const DiaryView: React.FC = () => {
   // just-set state and making the entry the user had just written appear to vanish.
   useEffect(() => {
     setDayPageIndex(0);
+    mergedAwayIdsRef.current = [];
+    openAtEndRef.current = false;
     if (selectedDayEntries.length > 0) {
       setPageMode('view');
       setEditingEntryId(null);
@@ -534,39 +540,82 @@ export const DiaryView: React.FC = () => {
     setIsFlipping(true);
     setPageTurnDirection('next');
     setTimeout(() => {
-      setPageMode('write');
-      setEditingEntryId(null);
-      setInlineTitle('');
-      setInlineContent('');
-      setInlinePhotos([]);
-      setInlineLocation('');
-      const d = new Date();
-      setInlineTime(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
+      if (selectedDayEntries.length > 0) {
+        // Never start a disconnected blank page: carry on at the end of this day's own writing,
+        // so a new leaf is part of the same text and erasing it walks back to the leaf before.
+        openDayForWriting(true);
+      } else {
+        setPageMode('write');
+        setEditingEntryId(null);
+        mergedAwayIdsRef.current = [];
+        setInlineTitle('');
+        setInlineContent('');
+        setInlinePhotos([]);
+        setInlineLocation('');
+        const d = new Date();
+        setInlineTime(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
+        setCurrentPageIdx(0);
+        setTimeout(() => {
+          textareaRef.current?.focus();
+        }, 100);
+      }
       setIsFlipping(false);
       isTurningPageRef.current = false;
-      setCurrentPageIdx(0);
-      setTimeout(() => {
-        textareaRef.current?.focus();
-      }, 100);
     }, 180);
   };
 
-  // Start editing existing page
+  // A day is ONE continuous piece of writing. Older versions of the app could leave several
+  // records on the same date, and those used to be unreachable from each other: each opened its
+  // own blank writer, so erasing a page could not walk back into the page before it. Opening a day
+  // for writing folds every record of that date into a single draft; saving keeps the first record
+  // and removes the ones folded in, so from then on the day really is one linked text.
+  const buildDayDraft = (entries: DiaryEntry[]) =>
+    entries
+      .map((entry, i) => {
+        const title = (entry.title || '').trim();
+        const content = (entry.content || '').trim();
+        // The first record's title stays the day's title; a later one would simply be lost, so it
+        // is folded into the text as its own line instead.
+        const heading = i > 0 && title && title !== 'Tiêu đề' ? `${title}\n` : '';
+        return heading + content;
+      })
+      .filter((part) => part.length > 0)
+      .join('\n\n');
+
+  const openDayForWriting = (atEnd: boolean) => {
+    const entries = selectedDayEntries;
+    const first = entries[0];
+    setPageMode('write');
+    setEditingEntryId(first?.id ?? null);
+    mergedAwayIdsRef.current = entries.slice(1).map((e) => e.id);
+    setInlineTitle(first?.title || '');
+    setInlineContent(buildDayDraft(entries));
+    setInlineTime(first?.time || '12:00');
+    const locations = Array.from(new Set(entries.map((e) => (e.location || '').trim()).filter(Boolean)));
+    setInlineLocation(locations.join(' · '));
+    setInlinePhotos(Array.from(new Set(entries.flatMap((e) => e.photos || []))));
+    setInlineMood(MOODS.find((m) => m.emoji === first?.mood) || MOODS[0]);
+    setInlineWeather(WEATHERS.find((w) => w.emoji === first?.weather) || WEATHERS[0]);
+    setCurrentPageIdx(0);
+    openAtEndRef.current = atEnd;
+  };
+
+  // "Write on" opens the day at the end of what is already written, on its last leaf.
+  useEffect(() => {
+    if (!openAtEndRef.current || pageMode !== 'write' || !mirrorRef.current) return;
+    openAtEndRef.current = false;
+    const last = Math.max(0, pages.length - 1);
+    setCurrentPageIdx(last);
+    pendingCaretRef.current = (pages[last] ?? '').length;
+    setTimeout(() => textareaRef.current?.focus(), 60);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pages, pageMode]);
+
+  // Start editing this day — the whole day, not just the record that was clicked.
   const handleStartEditPage = (entry: DiaryEntry) => {
     if (!entry) return;
     soundService.playPop();
-    setPageMode('write');
-    setEditingEntryId(entry.id);
-    setInlineTitle(entry.title || '');
-    setInlineContent(entry.content || '');
-    setInlineTime(entry.time || '12:00');
-    setInlineLocation(entry.location || '');
-    setInlinePhotos(entry.photos || []);
-    const foundMood = MOODS.find((m) => m.emoji === entry.mood) || MOODS[0];
-    setInlineMood(foundMood);
-    const foundWeather = WEATHERS.find((w) => w.emoji === entry.weather) || WEATHERS[0];
-    setInlineWeather(foundWeather);
-    setCurrentPageIdx(0);
+    openDayForWriting(false);
   };
 
   // Photo upload with fast compression
@@ -608,7 +657,10 @@ export const DiaryView: React.FC = () => {
     // A day now holds at most one diary record — "pages" are just how that one record's writing
     // is themed/displayed. If this day already has an entry (even if the user got here without
     // explicitly clicking "Sửa trang"), saving updates that SAME entry instead of adding another.
-    const targetEntryId = editingEntryId || selectedDayEntries[selectedDayEntries.length - 1]?.id;
+    const targetEntryId = editingEntryId || selectedDayEntries[0]?.id;
+    // Records folded into this draft are gone now — their text lives in `inlineContent`.
+    const foldedIds = mergedAwayIdsRef.current.filter((id) => id !== targetEntryId);
+    mergedAwayIdsRef.current = [];
 
     if (targetEntryId) {
       updateDiary(targetEntryId, {
@@ -624,8 +676,9 @@ export const DiaryView: React.FC = () => {
         tags: ['Kỷ niệm'],
         isPrivate: false,
       });
+      foldedIds.forEach((id) => deleteDiary(id));
       setEditingEntryId(null);
-      setDayPageIndex(Math.max(0, selectedDayEntries.length - 1));
+      setDayPageIndex(0);
       setPageMode('view');
     } else {
       addDiary({
@@ -805,11 +858,11 @@ export const DiaryView: React.FC = () => {
 
           <button
             onClick={() => {
-              // One entry per day: if today already has one, keep writing into it instead of
-              // starting a separate blank page.
-              const existing = selectedDayEntries[selectedDayEntries.length - 1];
-              if (existing) {
-                handleStartEditPage(existing);
+              // One continuous text per day: if this day already has writing, pick it up where it
+              // ended instead of starting a separate blank page.
+              if (selectedDayEntries.length > 0) {
+                soundService.playPop();
+                openDayForWriting(true);
               } else {
                 handleAddNewPageForThisDay();
               }
@@ -1151,7 +1204,10 @@ export const DiaryView: React.FC = () => {
 
                   {pageMode === 'write' && selectedDayEntries.length > 0 && (
                     <button
-                      onClick={() => setPageMode('view')}
+                      onClick={() => {
+                        mergedAwayIdsRef.current = [];
+                        setPageMode('view');
+                      }}
                       className="px-3 py-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 font-bold text-xs transition cursor-pointer"
                     >
                       Hủy / Xem lại
@@ -1455,6 +1511,7 @@ export const DiaryView: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => {
+                                mergedAwayIdsRef.current = [];
                                 setEditingEntryId(null);
                                 setPageMode('view');
                               }}
