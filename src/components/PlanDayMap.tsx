@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, MapPinOff, ExternalLink, LocateFixed, KeyRound, X } from 'lucide-react';
+import { Loader2, MapPinOff, ExternalLink, LocateFixed, KeyRound, Maximize2, X } from 'lucide-react';
 import { PlanStop } from '../types';
 import { LatLng } from '../utils/maps';
 import { PlacePickButton } from './PlaceTools';
@@ -116,7 +116,6 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
   const [geo, setGeo] = useState<Record<string, LatLng>>({});
   const [legs, setLegs] = useState<(Leg | null)[]>([]);
   const [loadingLegs, setLoadingLegs] = useState(false);
-  const [fitTick, setFitTick] = useState(0);
 
   // "My location" on the map
   const [showMe, setShowMe] = useState(false);
@@ -132,7 +131,26 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
     return { lat, lng };
   }, [meKey]);
   const [meLeg, setMeLeg] = useState<Leg | null>(null);
-  const lastFitRef = useRef<{ adapter: MapAdapter | null; key: string }>({ adapter: null, key: '' });
+
+  // Framing the whole day is a one-off: it happens when the map (or the day) opens and when the user asks for it.
+  // After that the zoom and pan belong to the user — nothing re-frames the map behind their back.
+  const viewRef = useRef<LatLng[]>([]);
+  const fittedRef = useRef<{ adapter: MapAdapter | null; day: number }>({ adapter: null, day: -1 });
+  const wantMeFitRef = useRef(false);
+  const dayRef = useRef(day);
+  dayRef.current = day;
+
+  const fitAll = useCallback(() => {
+    // A container that is still 0-wide (tab hidden, modal animating in) would fit at a nonsense zoom.
+    if (!adapter || viewRef.current.length === 0 || (elRef.current?.clientWidth ?? 0) === 0) return false;
+    adapter.fit(viewRef.current);
+    return true;
+  }, [adapter]);
+
+  const fitDayOnce = useCallback(() => {
+    if (fittedRef.current.adapter === adapter && fittedRef.current.day === dayRef.current) return;
+    if (fitAll()) fittedRef.current = { adapter, day: dayRef.current };
+  }, [adapter, fitAll]);
 
   const pickVehicle = (v: Vehicle) => {
     setVehicle(v);
@@ -223,20 +241,19 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meAnchor, pointSignature, vehicle]);
 
-  // The container can be 0-wide while a modal animates in or a tab is hidden; fitting then picks a wrong
-  // zoom. Re-measure and re-fit as soon as it gets a real size.
+  // The container can be 0-wide while a modal animates in or a tab is hidden. Re-measure when it gets a real
+  // size, and run the opening fit then if it could not run earlier. A later resize never re-frames the map.
   useEffect(() => {
     const node = elRef.current;
     if (!adapter || !node || typeof ResizeObserver === 'undefined') return;
     const obs = new ResizeObserver(() => {
-      if (node.clientWidth > 0) {
-        adapter.resize();
-        setFitTick((t) => t + 1);
-      }
+      if (node.clientWidth <= 0) return;
+      adapter.resize();
+      fitDayOnce();
     });
     obs.observe(node);
     return () => obs.disconnect();
-  }, [adapter]);
+  }, [adapter, fitDayOnce]);
 
   // Live location (blue dot).
   useEffect(() => {
@@ -257,7 +274,7 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
         meRef.current = next;
         setMe(next);
         setMeMsg('');
-        if (first) setFitTick((t) => t + 1); // include me in the view once
+        if (first) wantMeFitRef.current = true; // the user just asked for it: frame me with the route, once
       },
       () => {
         setMeMsg('Không lấy được vị trí — hãy cho phép trang truy cập vị trí trong trình duyệt.');
@@ -282,7 +299,7 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
       `transform:translate(-50%,-50%);display:flex;align-items:center;gap:5px;white-space:nowrap;padding:3px 9px;border-radius:999px;background:#fff;border:2px solid ${color};color:${color};font:700 11px/1.2 system-ui,sans-serif;box-shadow:0 2px 6px rgba(0,0,0,.25)`
     );
     wrap.appendChild(el('span', `padding:1px 6px;border-radius:999px;background:${color};color:#fff;font:800 10px/1.4 system-ui,sans-serif`, order));
-    wrap.appendChild(el('span', 'color:#3f3f46', `${VEHICLES[vehicle].emoji} ${formatKm(leg.km)} · ${formatMinutes(leg.minutes)}${leg.estimated ? ' ≈' : ''}`));
+    wrap.appendChild(el('span', 'color:#3f3f46', `${formatKm(leg.km)} · ${formatMinutes(leg.minutes)}${leg.estimated ? ' ≈' : ''}`));
     return wrap;
   };
 
@@ -346,15 +363,12 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
     });
 
     if (meAnchor) view.push(meAnchor);
+    viewRef.current = view;
 
-    // Only re-frame when the route itself changes (or the user asks): walking around must not keep snapping the map.
-    const fitKey = `${pointSignature}|${legs.length}|${meAnchor ? 'me' : ''}|${fitTick}`;
-    if (lastFitRef.current.adapter !== adapter || lastFitRef.current.key !== fitKey) {
-      lastFitRef.current = { adapter, key: fitKey };
-      adapter.fit(view);
-    }
+    fitDayOnce(); // opening the map (or switching day) frames the whole route — and only then
+    if (wantMeFitRef.current && meAnchor && fitAll()) wantMeFitRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adapter, points, legs, vehicle, fitTick, meAnchor, meLeg]);
+  }, [adapter, points, legs, vehicle, meAnchor, meLeg, fitDayOnce, fitAll]);
 
   const totalKm = legs.reduce((s, l) => s + (l?.km || 0), 0);
   const totalMin = legs.reduce((s, l) => s + (l?.minutes || 0), 0);
@@ -434,6 +448,16 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
           </div>
         )}
         <div className="absolute bottom-3 right-3 z-[500] flex items-center gap-1.5">
+          {points.length > 0 && (
+            <button
+              type="button"
+              onClick={fitAll}
+              title="Thu về xem toàn bộ chặng của ngày"
+              className="rounded-full shadow px-3 py-1.5 text-[11px] font-bold flex items-center gap-1.5 bg-white/95 dark:bg-zinc-900/95 text-zinc-600 dark:text-zinc-300 hover:text-rose-500 transition"
+            >
+              <Maximize2 className="w-3.5 h-3.5" /> Toàn chặng
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -443,7 +467,6 @@ const PlanDayMap: React.FC<Props> = ({ stops, days, day, dateLabel, destination,
               }
               const m = meRef.current;
               if (m && adapter) adapter.flyTo({ lat: m.lat, lng: m.lng }, 16); // press again = jump back to where I am
-              else setFitTick((t) => t + 1);
             }}
             className={`rounded-full shadow px-3 py-1.5 text-[11px] font-bold flex items-center gap-1.5 transition ${
               showMe ? 'bg-blue-500 text-white' : 'bg-white/95 dark:bg-zinc-900/95 text-blue-600 dark:text-blue-400'

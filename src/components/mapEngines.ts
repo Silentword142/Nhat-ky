@@ -30,8 +30,12 @@ export interface MapAdapter {
 const VN_CENTER: LatLng = { lat: 16.05, lng: 106.3 };
 const ROUTE_COLOR = '#f43f5e';
 
-/** One colour per leg so 1→2, 2→3, 3→4 ... are told apart at a glance. Index = leg order, wrapping around. */
-export const LEG_COLORS = ['#e11d48', '#7c3aed', '#059669', '#d97706', '#0891b2', '#db2777', '#4d7c0f', '#9333ea'];
+/**
+ * One colour per leg so 1→2, 2→3, 3→4 ... are told apart at a glance. Index = leg order, wrapping around.
+ * The hues are spread far apart (and neighbours never share one), and blue is left out on purpose:
+ * it belongs to the live location.
+ */
+export const LEG_COLORS = ['#e11d48', '#16a34a', '#f59e0b', '#7c3aed', '#0d9488', '#db2777', '#84cc16', '#b45309'];
 
 /** Reserved for the leg that starts at the user's live location, so it never looks like a normal leg. */
 export const ME_COLOR = '#2563eb';
