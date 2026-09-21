@@ -440,17 +440,6 @@ export const DiaryView: React.FC = () => {
     setTimeout(() => textareaRef.current?.focus(), 200);
   };
 
-  const absoluteDiariesOrder = useMemo(() => {
-    if (!Array.isArray(diaries)) return [];
-    return diaries.slice().sort((a, b) => {
-      const dateCmp = (a.date || '').localeCompare(b.date || '');
-      if (dateCmp !== 0) return dateCmp;
-      const timeCmp = (a.time || '').localeCompare(b.time || '');
-      if (timeCmp !== 0) return timeCmp;
-      return (a.createdAt || 0) - (b.createdAt || 0);
-    });
-  }, [diaries]);
-
   // Calendar Calculation
   const calendarDays = useMemo(() => {
     const year = currentCalDate.getFullYear();
@@ -805,20 +794,10 @@ export const DiaryView: React.FC = () => {
     setLightboxOpen(true);
   };
 
-  // Total pages of current day
-  const displayTotalPages = absoluteDiariesOrder.length + (pageMode === 'write' && !editingEntryId ? 1 : 0);
-  const currentPageNumber = useMemo(() => {
-    if (pageMode === 'write') {
-      if (editingEntryId) {
-        return absoluteDiariesOrder.findIndex(d => d.id === editingEntryId) + 1;
-      }
-      return absoluteDiariesOrder.length + 1;
-    }
-    if (currentDayEntry) {
-      return absoluteDiariesOrder.findIndex(d => d.id === currentDayEntry.id) + 1;
-    }
-    return absoluteDiariesOrder.length + 1;
-  }, [absoluteDiariesOrder, pageMode, editingEntryId, currentDayEntry]);
+  // Which leaf of THIS DAY's writing is on screen, out of how many leaves that day has — the leaf
+  // being written when writing, the leaf being read when reading. Not a count of days.
+  const displayTotalPages = pageMode === 'write' ? pages.length : Math.max(1, viewPageCount);
+  const currentPageNumber = (pageMode === 'write' ? currentPageIdx : dayPageIndex) + 1;
 
   return (
     <div className="w-full max-w-6xl mx-auto px-3 sm:px-6 pb-28 sm:pb-16 select-none">
@@ -1240,8 +1219,8 @@ export const DiaryView: React.FC = () => {
                   )}
 
                   <button
-                    onClick={handleTurnPrevDayPage}
-                    disabled={dayPageIndex === 0 || viewPageCount === 0}
+                    onClick={() => (pageMode === 'write' ? scrollToWritePage(currentPageIdx) : handleTurnPrevDayPage())}
+                    disabled={pageMode === 'write' ? currentPageIdx === 0 : dayPageIndex === 0 || viewPageCount === 0}
                     className="p-1.5 sm:px-2.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 hover:bg-rose-100 disabled:opacity-30 disabled:pointer-events-none transition flex items-center gap-1 font-bold text-xs cursor-pointer"
                     title="Lật sang trang trước của ngày này"
                   >
@@ -1250,8 +1229,8 @@ export const DiaryView: React.FC = () => {
                   </button>
 
                   <button
-                    onClick={handleTurnNextDayPage}
-                    disabled={dayPageIndex >= viewPageCount - 1 || viewPageCount === 0}
+                    onClick={() => (pageMode === 'write' ? scrollToWritePage(currentPageIdx + 2) : handleTurnNextDayPage())}
+                    disabled={pageMode === 'write' ? currentPageIdx >= pages.length - 1 : dayPageIndex >= viewPageCount - 1 || viewPageCount === 0}
                     className="p-1.5 sm:px-2.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 hover:bg-rose-100 disabled:opacity-30 disabled:pointer-events-none transition flex items-center gap-1 font-bold text-xs cursor-pointer"
                     title="Lật sang trang sau của ngày này"
                   >
@@ -1384,32 +1363,6 @@ export const DiaryView: React.FC = () => {
                         )}
                       </AnimatePresence>
 
-                      {/* Draft Page Navigation */}
-                      {pages.length > 1 && (
-                        <div className="absolute bottom-2 right-4 flex items-center gap-1 bg-white/80 dark:bg-zinc-800/80 px-1.5 py-1 rounded-full border border-rose-100 dark:border-zinc-700 shadow-xs select-none">
-                          <button
-                            type="button"
-                            onClick={() => scrollToWritePage(currentPageIdx)}
-                            disabled={currentPageIdx <= 0}
-                            className="p-0.5 rounded-full text-zinc-500 hover:text-rose-500 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
-                            title="Xem lại trang trước (không cần lưu)"
-                          >
-                            <ChevronLeft className="w-3.5 h-3.5" />
-                          </button>
-                          <span className="text-[10px] font-bold text-zinc-500 px-0.5">
-                            Trang {currentPageIdx + 1}/{pages.length}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => scrollToWritePage(currentPageIdx + 2)}
-                            disabled={currentPageIdx >= pages.length - 1}
-                            className="p-0.5 rounded-full text-zinc-500 hover:text-rose-500 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
-                            title="Sang xem trang tiếp theo (không cần lưu)"
-                          >
-                            <ChevronRight className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      )}
                     </div>
 
                     {/* Attached Photos in Write Mode */}
@@ -1584,7 +1537,7 @@ export const DiaryView: React.FC = () => {
                     {/* Synchronized Title Header Line */}
                     <div className="border-b-2 border-rose-300 dark:border-zinc-700 pb-1">
                       <h3 className="w-full font-romantic font-bold text-xl sm:text-2xl text-rose-600 dark:text-rose-400 break-words">
-                        {currentDayEntry.title || 'Trang nhật ký'}{viewPageCount > 1 ? ` (trang ${dayPageIndex + 1}/${viewPageCount})` : ''}
+                        {currentDayEntry.title || 'Trang nhật ký'}
                       </h3>
                     </div>
 
@@ -1624,32 +1577,6 @@ export const DiaryView: React.FC = () => {
                       >
                         {viewPages[dayPageIndex] ?? ''}
                       </div>
-
-                      {viewPageCount > 1 && (
-                        <div className="absolute bottom-2 right-4 flex items-center gap-1 bg-white/80 dark:bg-zinc-800/80 px-1.5 py-1 rounded-full border border-rose-100 dark:border-zinc-700 shadow-xs select-none">
-                          <button
-                            type="button"
-                            onClick={handleTurnPrevDayPage}
-                            disabled={dayPageIndex <= 0}
-                            className="p-0.5 rounded-full text-zinc-500 hover:text-rose-500 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
-                            title="Lật về trang trước"
-                          >
-                            <ChevronLeft className="w-3.5 h-3.5" />
-                          </button>
-                          <span className="text-[10px] font-bold text-zinc-500 px-0.5">
-                            Trang {dayPageIndex + 1}/{viewPageCount}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={handleTurnNextDayPage}
-                            disabled={dayPageIndex >= viewPageCount - 1}
-                            className="p-0.5 rounded-full text-zinc-500 hover:text-rose-500 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
-                            title="Lật sang trang sau"
-                          >
-                            <ChevronRight className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      )}
                     </div>
 
                     {/* Attached Photos in View Mode — on the last leaf, like an album at the end */}
