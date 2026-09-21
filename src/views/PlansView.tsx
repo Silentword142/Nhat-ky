@@ -123,6 +123,13 @@ export const PlansView: React.FC = () => {
 
   const selectedPlan = plans.find((p) => p.id === selectedId) || null;
 
+  /** Deleting is permanent and syncs to the partner, so it always asks first. */
+  const confirmDelete = (plan: TripPlan) => {
+    if (!window.confirm(`Xóa kế hoạch "${plan.title}"? Hành động này không thể hoàn tác và sẽ xóa ở cả hai máy.`)) return;
+    deletePlan(plan.id);
+    setSelectedId((cur) => (cur === plan.id ? null : cur));
+  };
+
   const sortedPlans = useMemo(() => {
     const rank = (p: TripPlan) => (p.status === 'done' ? 2 : p.status === 'dreaming' ? 1 : 0);
     return [...plans].sort((a, b) => {
@@ -265,7 +272,21 @@ export const PlansView: React.FC = () => {
                   <div className="absolute inset-0 opacity-25" style={{ backgroundImage: 'radial-gradient(circle at 20% 20%, #fff 0, transparent 40%), radial-gradient(circle at 85% 80%, #fff 0, transparent 35%)' }} />
                   <div className="relative flex items-start justify-between">
                     <CountdownBadge plan={plan} />
-                    <span className="text-4xl drop-shadow group-hover:scale-110 transition-transform">{plan.emoji}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-4xl drop-shadow group-hover:scale-110 transition-transform">{plan.emoji}</span>
+                      <button
+                        type="button"
+                        title="Xóa kế hoạch này"
+                        aria-label={`Xóa kế hoạch ${plan.title}`}
+                        onClick={(e) => {
+                          e.stopPropagation(); // the card itself opens the plan
+                          confirmDelete(plan);
+                        }}
+                        className="p-1.5 rounded-full bg-white/25 hover:bg-red-500 text-white transition"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                   <div className="relative">
                     <h3 className="text-white font-bold text-lg leading-tight line-clamp-1 drop-shadow">{plan.title}</h3>
@@ -289,7 +310,7 @@ export const PlansView: React.FC = () => {
 
                   <div>
                     <div className="flex items-center justify-between text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 mb-1">
-                      <span>Chuẩn bị {progress}%</span>
+                      <span>Triển khai {progress}%</span>
                       <span>
                         {plan.stops.length} điểm đến · {getDuration(plan)} ngày
                       </span>
@@ -335,12 +356,7 @@ export const PlansView: React.FC = () => {
             plan={selectedPlan}
             onClose={() => setSelectedId(null)}
             onUpdate={(u) => updatePlan(selectedPlan.id, u)}
-            onDelete={() => {
-              if (window.confirm(`Xóa kế hoạch "${selectedPlan.title}"?`)) {
-                deletePlan(selectedPlan.id);
-                setSelectedId(null);
-              }
-            }}
+            onDelete={() => confirmDelete(selectedPlan)}
           />
         )}
       </AnimatePresence>
@@ -577,7 +593,7 @@ const PlanDetailModal: React.FC<{
 
         <div className="mt-4">
           <div className="flex justify-between text-[11px] font-semibold text-white/90 mb-1">
-            <span>Tiến độ chuẩn bị</span>
+            <span>Tiến độ triển khai</span>
             <span>{progress}%</span>
           </div>
           <div className="h-2 rounded-full bg-white/25 overflow-hidden">
@@ -611,7 +627,10 @@ const PlanDetailModal: React.FC<{
 
       <div className="px-5 pb-5 flex items-center justify-between text-[11px] text-zinc-400">
         <span>Tạo bởi {plan.authorName}</span>
-        <button onClick={onDelete} className="flex items-center gap-1 font-semibold text-zinc-400 hover:text-red-500 transition">
+        <button
+          onClick={onDelete}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full font-bold bg-red-50 dark:bg-red-950/40 text-red-500 hover:bg-red-500 hover:text-white transition"
+        >
           <Trash2 className="w-3.5 h-3.5" /> Xóa kế hoạch
         </button>
       </div>
