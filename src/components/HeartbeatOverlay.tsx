@@ -1,14 +1,16 @@
 import React, { useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Heart, Sparkles, X } from 'lucide-react';
+import { BookOpen, Heart, Sparkles, X } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useCouple } from '../context/CoupleContext';
 
-export const HeartbeatOverlay: React.FC = () => {
+export const HeartbeatOverlay: React.FC<{ onOpenDiary?: (date?: string) => void }> = ({ onOpenDiary }) => {
   const { incomingHeartbeat, clearIncomingHeartbeat, sendHeartbeat } = useCouple();
+  const isDiaryNotice = incomingHeartbeat?.type === 'diary';
 
   useEffect(() => {
-    if (incomingHeartbeat) {
+    // A finished diary page is news, not a touch — no confetti burst for it.
+    if (incomingHeartbeat && incomingHeartbeat.type !== 'diary') {
       // Trigger romantic confetti burst
       try {
         confetti({
@@ -21,19 +23,19 @@ export const HeartbeatOverlay: React.FC = () => {
       } catch {
         // fallback
       }
-
-      // Auto dismiss after 6s
-      const timer = setTimeout(() => {
-        clearIncomingHeartbeat();
-      }, 6000);
-      return () => clearTimeout(timer);
     }
+    if (!incomingHeartbeat) return;
+    // Auto dismiss after 6s (a bit longer for a diary notice: there is something to go and read)
+    const timer = setTimeout(() => clearIncomingHeartbeat(), incomingHeartbeat.type === 'diary' ? 10000 : 6000);
+    return () => clearTimeout(timer);
   }, [incomingHeartbeat, clearIncomingHeartbeat]);
 
   if (!incomingHeartbeat) return null;
 
   const getEmoji = () => {
     switch (incomingHeartbeat.type) {
+      case 'diary':
+        return '📖✨';
       case 'miss_you':
         return '🥺💖';
       case 'hug':
@@ -47,6 +49,8 @@ export const HeartbeatOverlay: React.FC = () => {
 
   const getTitle = () => {
     switch (incomingHeartbeat.type) {
+      case 'diary':
+        return `${incomingHeartbeat.senderName} vừa viết xong một trang nhật ký!`;
       case 'miss_you':
         return `${incomingHeartbeat.senderName} đang nhớ bạn rất nhiều!`;
       case 'hug':
@@ -96,19 +100,23 @@ export const HeartbeatOverlay: React.FC = () => {
           </h3>
 
           <p className="text-sm text-zinc-600 dark:text-zinc-300 italic mb-6">
-            "{incomingHeartbeat.message || 'Tim mình vừa rung rinh khi nghĩ về cậu!'}"
+            {isDiaryNotice ? incomingHeartbeat.message || 'Hãy mở nhật ký ra đọc nhé!' : `"${incomingHeartbeat.message || 'Tim mình vừa rung rinh khi nghĩ về cậu!'}"`}
           </p>
 
           <div className="flex gap-2">
             <button
               onClick={() => {
-                sendHeartbeat('kiss', 'Gửi lại cho cậu ngàn nụ hôn ngọt ngào! 💋');
+                if (isDiaryNotice) {
+                  onOpenDiary?.(incomingHeartbeat.diaryDate);
+                } else {
+                  sendHeartbeat('kiss', 'Gửi lại cho cậu ngàn nụ hôn ngọt ngào! 💋');
+                }
                 clearIncomingHeartbeat();
               }}
               className="flex-1 py-2.5 px-3 rounded-2xl bg-rose-500 hover:bg-rose-600 text-white font-semibold text-sm shadow-md shadow-rose-200 dark:shadow-rose-950 flex items-center justify-center gap-1.5 transition active:scale-95"
             >
-              <Heart className="w-4 h-4 fill-white" />
-              Gửi Yêu Lại 💖
+              {isDiaryNotice ? <BookOpen className="w-4 h-4" /> : <Heart className="w-4 h-4 fill-white" />}
+              {isDiaryNotice ? 'Đọc ngay 📖' : 'Gửi Yêu Lại 💖'}
             </button>
             <button
               onClick={clearIncomingHeartbeat}

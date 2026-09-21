@@ -113,7 +113,7 @@ export interface CoupleContextType {
   updatePlan: (id: string, updates: Partial<TripPlan>) => void;
   deletePlan: (id: string) => void;
 
-  sendHeartbeat: (type: HeartbeatPulse['type'], message?: string) => void;
+  sendHeartbeat: (type: HeartbeatPulse['type'], message?: string, diaryDate?: string) => void;
   clearIncomingHeartbeat: () => void;
   sendTypingStatus: (isTyping: boolean) => void;
   roomPlaylist: any[];
@@ -135,6 +135,31 @@ const STORAGE_KEY_PREFIX = 'lovesync_cloud_v2_';
  * Everything else in settings — the love date, cycle tracking, the shared photo folder — is shared.
  */
 const PERSONAL_SETTING_KEYS = ['theme', 'isDarkMode'] as const;
+
+/**
+ * A notification from the browser itself, for when the app is in another tab or minimised — the
+ * in-app card is invisible then. Silently does nothing until the person allows notifications
+ * (Cài đặt → Thông báo trên trình duyệt), which browsers only grant on a real click.
+ */
+const notifyInBrowser = (title: string, body: string) => {
+  try {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') return;
+    const note = new Notification(title, {
+      body,
+      tag: 'lovesync-pulse', // a newer notice replaces the previous one instead of stacking up
+      icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">💖</text></svg>',
+    });
+    note.onclick = () => {
+      try {
+        window.focus();
+      } catch {}
+      note.close();
+    };
+  } catch {
+    // notifications are a bonus; never let them break the sync
+  }
+};
 
 const stripPersonalSettings = <T extends Record<string, unknown>>(settings: T): T => {
   const shared = { ...settings };
@@ -843,14 +868,22 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const pulse = data.lastActivePulse;
         if (pulse.senderId !== myUserId && pulse.timestamp > lastProcessedPulseRef.current) {
           lastProcessedPulseRef.current = pulse.timestamp;
-          soundService.playHeartbeat();
+          const senderName = pulse.senderName || 'Người yêu';
+          if (pulse.type === 'diary') soundService.playPaperOpen();
+          else soundService.playHeartbeat();
           setIncomingHeartbeat({
             senderId: pulse.senderId,
-            senderName: pulse.senderName || 'Người yêu',
+            senderName,
             type: pulse.type || 'heart',
             timestamp: pulse.timestamp,
             message: pulse.message,
+            diaryDate: pulse.diaryDate,
           });
+          // The in-app card only helps if the app is on screen; otherwise ask the browser to say it.
+          notifyInBrowser(
+            pulse.type === 'diary' ? `${senderName} vừa viết xong nhật ký 📖` : `${senderName} vừa gửi yêu thương 💖`,
+            pulse.message || ''
+          );
         }
       }
 
@@ -1977,7 +2010,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // Heartbeat & Typing
   const sendHeartbeat = useCallback(
-    (type: HeartbeatPulse['type'], message?: string) => {
+    (type: HeartbeatPulse['type'], message?: string, diaryDate?: string) => {
       broadcastRoomChanges({
         lastActivePulse: {
           senderId: myUserId,
@@ -1985,6 +2018,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           type,
           timestamp: Date.now(),
           message: message || '',
+          ...(diaryDate ? { diaryDate } : {}),
         },
       });
     },

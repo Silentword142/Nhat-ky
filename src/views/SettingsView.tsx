@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import {
   Palette,
   Volume2,
+  Bell,
   VolumeX,
   Sparkles,
   Share2,
@@ -81,6 +82,22 @@ export const SettingsView: React.FC = () => {
   } = useCouple();
 
   const currentTheme = THEMES[settings.theme] || THEMES.sakura;
+
+  // Browser notifications for "your other half finished a diary page". The permission belongs to
+  // this browser, not to the account, so it is read from the browser rather than from settings.
+  const [notifyPermission, setNotifyPermission] = useState<string>(
+    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission
+  );
+
+  const askForNotifyPermission = async () => {
+    if (typeof Notification === 'undefined') return;
+    soundService.playPop();
+    try {
+      setNotifyPermission(await Notification.requestPermission());
+    } catch {
+      // a denied or dismissed prompt just leaves the state as it was
+    }
+  };
 
   // Profile states
   const [name, setName] = useState(myProfile.name);
@@ -1325,6 +1342,34 @@ export const SettingsView: React.FC = () => {
                 />
               </button>
             </div>
+          </div>
+
+          {/* Browser notification permission */}
+          <div className="flex items-center justify-between p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-800/40">
+            <div className="flex items-center gap-2.5">
+              <Bell className={`w-5 h-5 ${notifyPermission === 'granted' ? 'text-rose-500' : 'text-zinc-400'}`} />
+              <div>
+                <div className="text-xs sm:text-sm font-bold text-zinc-800 dark:text-zinc-100">Thông báo trên trình duyệt</div>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  {notifyPermission === 'granted'
+                    ? 'Đang bật — khi người ấy viết xong một trang nhật ký, máy sẽ báo cho bạn kể cả lúc đang ở tab khác.'
+                    : notifyPermission === 'denied'
+                    ? 'Trình duyệt đang chặn. Hãy mở phần cài đặt quyền của trang này và cho phép thông báo.'
+                    : notifyPermission === 'unsupported'
+                    ? 'Trình duyệt này không hỗ trợ thông báo.'
+                    : 'Cho phép để được báo khi người ấy viết xong một trang nhật ký, kể cả khi bạn đang ở tab khác.'}
+                </div>
+              </div>
+            </div>
+            {notifyPermission === 'default' && (
+              <button
+                onClick={askForNotifyPermission}
+                className="px-3 py-1.5 text-[11px] font-bold rounded-xl bg-rose-500 hover:bg-rose-600 text-white cursor-pointer whitespace-nowrap"
+              >
+                Cho phép
+              </button>
+            )}
+            {notifyPermission === 'granted' && <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">Đã bật ✓</span>}
           </div>
 
           {/* Floating Particles switch */}

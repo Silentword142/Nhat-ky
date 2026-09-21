@@ -33,6 +33,7 @@ import { compressImageFile } from '../utils/image';
 import { CycleTrackerModal } from '../components/CycleTrackerModal';
 import { getDayCycleInfo } from '../utils/cycle';
 import { formatDateVN } from '../utils/date';
+import { consumeDiaryDate, onDiaryDateRequest } from '../utils/diaryFocus';
 
 const MOODS = [
   { emoji: '🥰', label: 'Hạnh phúc' },
@@ -126,6 +127,19 @@ export const DiaryView: React.FC = () => {
   // Selected calendar date (YYYY-MM-DD)
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
+
+  // "Đọc ngay" on the partner's notice: open their day, both on mount and while already here.
+  useEffect(() => {
+    const focusRequestedDay = () => {
+      const date = consumeDiaryDate();
+      if (!date) return;
+      setSelectedDate(date);
+      setCurrentCalDate(new Date(`${date}T00:00:00`));
+      setDayPageIndex(0);
+    };
+    focusRequestedDay();
+    return onDiaryDateRequest(focusRequestedDay);
+  }, []);
 
   // Cycle Info for Selected Date
   const selectedDayCycleInfo = useMemo(() => {
@@ -654,6 +668,19 @@ export const DiaryView: React.FC = () => {
     setInlinePhotos((prev) => prev.filter((_, i) => i !== index));
   };
 
+  /**
+   * Tell the other one that a page is finished — the moment it is saved, not while it is being
+   * typed. It carries the day so their app can open straight to it, and the title as the preview.
+   */
+  const notifyPartnerOfWriting = () => {
+    const title = inlineTitle.trim();
+    sendHeartbeat(
+      'diary',
+      `Nhật ký ngày ${formatDisplayDate(selectedDate)}${title ? `: "${title}"` : ''}`,
+      selectedDate
+    );
+  };
+
   // Save Diary Page
   const handleSavePage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -691,6 +718,7 @@ export const DiaryView: React.FC = () => {
         isPrivate: false,
       });
       foldedIds.forEach((id) => deleteDiary(id));
+      notifyPartnerOfWriting();
       setEditingEntryId(null);
       setDayPageIndex(0);
       setPageMode('view');
@@ -709,6 +737,7 @@ export const DiaryView: React.FC = () => {
         pageNumber: 1,
         isPrivate: false,
       });
+      notifyPartnerOfWriting();
       setDayPageIndex(0);
       setPageMode('view');
     }

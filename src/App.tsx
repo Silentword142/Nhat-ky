@@ -15,6 +15,7 @@ import { PlansView } from './views/PlansView';
 import { SettingsView } from './views/SettingsView';
 import { THEMES } from './utils/theme';
 import { soundService } from './services/sound';
+import { requestDiaryDate } from './utils/diaryFocus';
 
 const MainAppContent: React.FC = () => {
   const { settings } = useCouple();
@@ -72,7 +73,12 @@ const MainAppContent: React.FC = () => {
       <FloatingHearts enabled={settings.floatingParticles} />
 
       {/* Real-time Heartbeat / Touch Pulse overlay */}
-      <HeartbeatOverlay />
+      <HeartbeatOverlay
+        onOpenDiary={(date) => {
+          setActiveTab('diary');
+          requestDiaryDate(date);
+        }}
+      />
 
       {/* Couple Music Player Widget & Modal (3-Level display) */}
       <MusicPlayer />

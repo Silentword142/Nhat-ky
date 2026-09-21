@@ -293,9 +293,12 @@ export interface TripPlan {
 export interface HeartbeatPulse {
   senderId: string;
   senderName: string;
-  type: 'miss_you' | 'hug' | 'kiss' | 'heart';
+  /** 'diary' is not a touch but a notice: the other one finished writing in the diary. */
+  type: 'miss_you' | 'hug' | 'kiss' | 'heart' | 'diary';
   timestamp: number;
   message?: string;
+  /** For a 'diary' notice: which day was written, so the reader can jump straight to it. */
+  diaryDate?: string;
 }
 
 export interface EncryptedPacket {
