@@ -290,6 +290,23 @@ export interface TripPlan {
   updatedAt: number;
 }
 
+/** Spending buckets for Dating Fees. The order is fixed: it is also the order colours are handed out in. */
+export type ExpenseCategoryId = 'other' | 'travel' | 'food' | 'fun' | 'cafe' | 'gift' | 'hotel' | 'movie' | 'shopping';
+
+/** One thing paid for on a date, entered by hand in Dating Fees. Shared by both partners. */
+export interface DatingExpense {
+  id: string;
+  date: string; // YYYY-MM-DD
+  title: string;
+  amount: number; // VND
+  category: ExpenseCategoryId;
+  note?: string;
+  authorId: string;
+  authorName: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface HeartbeatPulse {
   senderId: string;
   senderName: string;
@@ -320,6 +337,7 @@ export interface CoupleFullState {
   cards: HandwrittenCard[];
   anniversaries: AnniversaryEvent[];
   plans?: TripPlan[];
+  datingExpenses?: DatingExpense[];
   playlist?: MusicTrack[];
   albums?: Album[];
 }

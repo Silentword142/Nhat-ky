@@ -8,6 +8,7 @@ import {
   AnniversaryEvent,
   TripPlan,
   HeartbeatPulse,
+  DatingExpense,
   CoupleFullState,
 } from '../types';
 import {
@@ -58,6 +59,7 @@ export interface CoupleContextType {
   cards: HandwrittenCard[];
   anniversaries: AnniversaryEvent[];
   plans: TripPlan[];
+  datingExpenses: DatingExpense[];
   isPartnerOnline: boolean;
   isPartnerTyping: boolean;
   incomingHeartbeat: HeartbeatPulse | null;
@@ -112,6 +114,10 @@ export interface CoupleContextType {
   addPlan: (plan: Omit<TripPlan, 'id' | 'createdAt' | 'updatedAt' | 'authorId' | 'authorName'>) => string;
   updatePlan: (id: string, updates: Partial<TripPlan>) => void;
   deletePlan: (id: string) => void;
+
+  addExpense: (expense: Omit<DatingExpense, 'id' | 'createdAt' | 'updatedAt' | 'authorId' | 'authorName'>) => void;
+  updateExpense: (id: string, updates: Partial<DatingExpense>) => void;
+  deleteExpense: (id: string) => void;
 
   sendHeartbeat: (type: HeartbeatPulse['type'], message?: string, diaryDate?: string) => void;
   clearIncomingHeartbeat: () => void;
@@ -469,6 +475,17 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   });
 
+  const [datingExpenses, setDatingExpenses] = useState<DatingExpense[]>(() => {
+    try {
+      const current = getCurrentAuthUser();
+      if (!current) return [];
+      const saved = localStorage.getItem(`${STORAGE_KEY_PREFIX}datingExpenses`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [roomPlaylist, setRoomPlaylist] = useState<any[]>(() => {
     try {
       const saved = localStorage.getItem('lovesync_full_playlist_v3');
@@ -662,6 +679,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                   cards,
                   anniversaries,
                   plans,
+                  datingExpenses,
                   settings,
                 });
               })
@@ -780,6 +798,23 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           );
           try {
             localStorage.setItem(`${STORAGE_KEY_PREFIX}plans`, JSON.stringify(merged));
+          } catch {}
+          return merged;
+        });
+      }
+
+      // 4a'. Sync Dating Fees
+      if (Array.isArray(data.datingExpenses)) {
+        setDatingExpenses((prev) => {
+          const merged = mergeWithAuthoritativeRemote<DatingExpense>(
+            prev,
+            data.datingExpenses,
+            deletedIds,
+            hasUserMutatedRef.current,
+            data.updatedAt || 0
+          );
+          try {
+            localStorage.setItem(`${STORAGE_KEY_PREFIX}datingExpenses`, JSON.stringify(merged));
           } catch {}
           return merged;
         });
@@ -1396,6 +1431,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           cards,
           anniversaries,
           plans,
+          datingExpenses,
           settings: { ...stripPersonalSettings(settings), roomCode: cleanCode },
           profiles: {
             [myUserId]: { ...myProfileRef.current, id: myUserId, lastActive: Date.now() },
@@ -1461,8 +1497,10 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setCards([]);
     setAnniversaries([]);
     setPlans([]);
+    setDatingExpenses([]);
     try {
       localStorage.removeItem(`${STORAGE_KEY_PREFIX}plans`);
+      localStorage.removeItem(`${STORAGE_KEY_PREFIX}datingExpenses`);
       localStorage.removeItem(`${STORAGE_KEY_PREFIX}diaries`);
       localStorage.removeItem(`${STORAGE_KEY_PREFIX}photos`);
       localStorage.removeItem(`${STORAGE_KEY_PREFIX}cards`);
@@ -2008,6 +2046,61 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     [broadcastRoomChanges]
   );
 
+  // Dating Fees — shared by both partners, synced exactly like plans
+  const persistExpenses = (next: DatingExpense[]) => {
+    try {
+      localStorage.setItem(`${STORAGE_KEY_PREFIX}datingExpenses`, JSON.stringify(next));
+    } catch {}
+  };
+
+  const addExpense = useCallback(
+    (expense: Omit<DatingExpense, 'id' | 'createdAt' | 'updatedAt' | 'authorId' | 'authorName'>) => {
+      hasUserMutatedRef.current = true;
+      const nowTime = Date.now();
+      const entry: DatingExpense = {
+        ...expense,
+        id: `fee_${nowTime}_${Math.random().toString(36).substring(2, 6)}`,
+        authorId: myUserId,
+        authorName: myProfile.name,
+        createdAt: nowTime,
+        updatedAt: nowTime,
+      };
+      setDatingExpenses((prev) => {
+        const next = [entry, ...prev.filter((e) => e.id !== entry.id)];
+        persistExpenses(next);
+        broadcastRoomChanges({ datingExpenses: next });
+        return next;
+      });
+    },
+    [myUserId, myProfile.name, broadcastRoomChanges]
+  );
+
+  const updateExpense = useCallback(
+    (id: string, updates: Partial<DatingExpense>) => {
+      hasUserMutatedRef.current = true;
+      setDatingExpenses((prev) => {
+        const next = prev.map((e) => (e.id === id ? { ...e, ...updates, id, updatedAt: Date.now() } : e));
+        persistExpenses(next);
+        broadcastRoomChanges({ datingExpenses: next });
+        return next;
+      });
+    },
+    [broadcastRoomChanges]
+  );
+
+  const deleteExpense = useCallback(
+    (id: string) => {
+      hasUserMutatedRef.current = true;
+      setDatingExpenses((prev) => {
+        const next = prev.filter((e) => e.id !== id);
+        persistExpenses(next);
+        broadcastRoomChanges({ datingExpenses: next, deletedId: id });
+        return next;
+      });
+    },
+    [broadcastRoomChanges]
+  );
+
   // Heartbeat & Typing
   const sendHeartbeat = useCallback(
     (type: HeartbeatPulse['type'], message?: string, diaryDate?: string) => {
@@ -2054,9 +2147,10 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       cards,
       anniversaries,
       plans,
+      datingExpenses,
     };
     return JSON.stringify(fullState, null, 2);
-  }, [myProfile, partnerProfile, settings, diaries, photos, cards, anniversaries, plans]);
+  }, [myProfile, partnerProfile, settings, diaries, photos, cards, anniversaries, plans, datingExpenses]);
 
   const importData = useCallback(
     (jsonStr: string): boolean => {
@@ -2070,6 +2164,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (Array.isArray(parsed.cards)) setCards(parsed.cards);
         if (Array.isArray(parsed.anniversaries)) setAnniversaries(parsed.anniversaries);
         if (Array.isArray(parsed.plans)) setPlans(parsed.plans);
+        if (Array.isArray(parsed.datingExpenses)) setDatingExpenses(parsed.datingExpenses);
 
         broadcastRoomChanges({
           diaries: parsed.diaries || [],
@@ -2077,6 +2172,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           cards: parsed.cards || [],
           anniversaries: parsed.anniversaries || [],
           plans: parsed.plans || [],
+          datingExpenses: parsed.datingExpenses || [],
           settings: stripPersonalSettings(parsed.settings || {}),
         });
         return true;
@@ -2237,6 +2333,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         cards,
         anniversaries,
         plans,
+        datingExpenses,
         isPartnerOnline,
         isPartnerTyping,
         incomingHeartbeat,
@@ -2279,6 +2376,9 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         addPlan,
         updatePlan,
         deletePlan,
+        addExpense,
+        updateExpense,
+        deleteExpense,
         sendHeartbeat,
         clearIncomingHeartbeat,
         sendTypingStatus,

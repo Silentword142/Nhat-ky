@@ -1,10 +1,10 @@
 import React from 'react';
-import { BookHeart, Image as ImageIcon, Mail, Hourglass, Settings, Plane } from 'lucide-react';
+import { BookHeart, Image as ImageIcon, Mail, Hourglass, Settings, Plane, Wallet } from 'lucide-react';
 import { useCouple } from '../context/CoupleContext';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 
-export type TabType = 'diary' | 'photos' | 'cards' | 'anniversary' | 'plans' | 'settings';
+export type TabType = 'diary' | 'photos' | 'cards' | 'anniversary' | 'plans' | 'fees' | 'settings';
 
 interface NavbarProps {
   activeTab: TabType;
@@ -30,6 +30,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
     },
     { id: 'anniversary' as TabType, label: 'Kỷ Niệm', icon: Hourglass, emoji: '⏳' },
     { id: 'plans' as TabType, label: 'Đi Chơi', icon: Plane, emoji: '✈️' },
+    { id: 'fees' as TabType, label: 'Chi Tiêu', icon: Wallet, emoji: '💸' },
     { id: 'settings' as TabType, label: 'Ghép Đôi', icon: Settings, emoji: '⚙️' },
   ];
 
@@ -73,7 +74,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
       </div>
 
       {/* Mobile Floating Bottom Bar */}
-      <div className={`sm:hidden fixed bottom-0 inset-x-0 z-40 ${currentTheme.cardBg} backdrop-blur-2xl border-t ${currentTheme.cardBorder} px-3 py-2 flex items-center justify-around shadow-2xl safe-area-pb`}>
+      <div className={`sm:hidden fixed bottom-0 inset-x-0 z-40 ${currentTheme.cardBg} backdrop-blur-2xl border-t ${currentTheme.cardBorder} px-1 py-2 flex items-center justify-around shadow-2xl safe-area-pb`}>
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
@@ -81,7 +82,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
             <button
               key={item.id}
               onClick={() => handleTabClick(item.id)}
-              className={`flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-2xl transition relative cursor-pointer ${
+              className={`flex flex-col items-center justify-center gap-1 px-1 py-1 rounded-2xl transition relative cursor-pointer min-w-0 ${
                 isActive ? 'font-bold scale-105' : 'text-zinc-500 dark:text-zinc-400 font-medium'
               }`}
               style={{ color: isActive ? currentTheme.primaryColor : undefined }}
@@ -94,7 +95,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
                   </span>
                 )}
               </div>
-              <span className="text-[11px] leading-none font-cute">{item.label}</span>
+              <span className="text-[10px] leading-none font-cute whitespace-nowrap">{item.label}</span>
               {isActive && (
                 <span
                   className="w-1.5 h-1.5 rounded-full mt-0.5"
