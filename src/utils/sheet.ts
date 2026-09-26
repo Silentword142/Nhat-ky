@@ -43,7 +43,8 @@ export const parseNumber = (raw: string): number | null => {
   return isNaN(n) ? null : n;
 };
 
-export const formatNumber = (n: number): string => n.toLocaleString('vi-VN', { maximumFractionDigits: 2 });
+// Commas group thousands (1,500,000) and a dot marks decimals (1.5), matching money everywhere else.
+export const formatNumber = (n: number): string => n.toLocaleString('en-US', { maximumFractionDigits: 2 });
 
 type Token =
   | { t: 'num'; v: number }

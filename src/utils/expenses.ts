@@ -1,5 +1,8 @@
 import { DatingExpense, ExpenseCategoryId, TripPlan } from '../types';
 import { resolveStop } from './planStops';
+import { formatVND, formatVNDShort } from './money';
+
+export { formatVND, formatVNDShort };
 
 /* ------------------------------------------------------------------ categories */
 
@@ -72,17 +75,6 @@ export const guessCategory = (...texts: (string | undefined)[]): ExpenseCategory
 
 /* ------------------------------------------------------------------ money */
 
-export const formatVND = (n: number) => `${Math.round(n).toLocaleString('vi-VN')}đ`;
-
-/** Compact form for axis ticks and tight tiles: 350k, 1,2tr, 2,5 tỷ. */
-export const formatVNDShort = (n: number) => {
-  const abs = Math.abs(n);
-  const trim = (x: number) => x.toFixed(x < 10 ? 1 : 0).replace(/\.0$/, '').replace('.', ',');
-  if (abs >= 1e9) return `${trim(n / 1e9)} tỷ`;
-  if (abs >= 1e6) return `${trim(n / 1e6)}tr`;
-  if (abs >= 1e3) return `${Math.round(n / 1e3)}k`;
-  return `${Math.round(n)}đ`;
-};
 
 /* ------------------------------------------------------------------ dates (local, no timezone drift) */
 
@@ -188,6 +180,7 @@ export interface ExpenseRow {
   amount: number;
   category: ExpenseCategoryId;
   note?: string;
+  paidBy?: string;
   source: 'manual' | 'plan';
   authorName?: string;
   /** Set for rows that come from a trip plan (read-only here; edited in Đi Chơi). */
@@ -207,6 +200,7 @@ export const manualRows = (expenses: DatingExpense[]): ExpenseRow[] =>
       amount: Number(e.amount),
       category: e.category || 'other',
       note: e.note,
+      paidBy: e.paidBy,
       source: 'manual' as const,
       authorName: e.authorName,
       expense: e,
@@ -233,6 +227,7 @@ export const planRows = (plans: TripPlan[]): ExpenseRow[] => {
         amount,
         category: guessCategory(stop.title, stop.place),
         note: stop.place,
+        paidBy: raw.paidBy,
         source: 'plan',
         planTitle: plan.title,
         planEmoji: plan.emoji,
@@ -247,6 +242,7 @@ export const planRows = (plans: TripPlan[]): ExpenseRow[] => {
         title: x.label || 'Chi phí khác',
         amount,
         category: guessCategory(x.label),
+        paidBy: x.paidBy,
         source: 'plan',
         planTitle: plan.title,
         planEmoji: plan.emoji,

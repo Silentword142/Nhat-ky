@@ -27,9 +27,9 @@ import { colName, displayValue, evaluateSheet, isErrorValue, parseNumber } from 
 import { soundService } from '../services/sound';
 import { PlaceActions, PlacePickButton } from './PlaceTools';
 import { safeUrl } from '../utils/maps';
+import { formatVND, groupThousands } from '../utils/money';
 
 const newId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-const formatVND = (n: number) => `${Math.round(n).toLocaleString('vi-VN')}đ`;
 
 const fieldCls =
   'w-full px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 border-0 text-sm text-zinc-800 dark:text-zinc-100 focus:ring-2 focus:ring-rose-400 placeholder:text-zinc-400';
@@ -454,7 +454,7 @@ const OptionsBlock: React.FC<{
               />
               <PlaceActions place={{ name: o.place, lat: o.lat, lng: o.lng, reviewUrl: o.reviewUrl }} />
               <CommitInput
-                value={o.price ? String(o.price) : ''}
+                value={o.price ? groupThousands(o.price) : ''}
                 inputMode="numeric"
                 onCommit={(v) => patch(o.id, { price: parseNumber(v) ?? undefined })}
                 placeholder="Giá (VNĐ)"

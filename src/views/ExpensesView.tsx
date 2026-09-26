@@ -6,6 +6,8 @@ import { DatingExpense, ExpenseCategoryId } from '../types';
 import { THEMES } from '../utils/theme';
 import { soundService } from '../services/sound';
 import { DateInputVN } from '../components/DateInputVN';
+import { digitsToGrouped } from '../utils/money';
+import { PayerChip, PayerPicker, PayerSummary, usePayers } from '../components/PayerPicker';
 import {
   EXPENSE_CATEGORIES,
   PICKER_ORDER,
@@ -191,7 +193,7 @@ const ExpenseModal: React.FC<{
   defaultDate: string;
   isDark: boolean;
   onClose: () => void;
-  onSave: (data: { date: string; title: string; amount: number; category: ExpenseCategoryId; note?: string }) => void;
+  onSave: (data: { date: string; title: string; amount: number; category: ExpenseCategoryId; note?: string; paidBy?: string }) => void;
   onDelete?: () => void;
 }> = ({ initial, defaultDate, isDark, onClose, onSave, onDelete }) => {
   const [category, setCategory] = useState<ExpenseCategoryId>(initial?.category || 'food');
@@ -199,13 +201,15 @@ const ExpenseModal: React.FC<{
   const [title, setTitle] = useState(initial?.title || '');
   const [date, setDate] = useState(initial?.date || defaultDate);
   const [note, setNote] = useState(initial?.note || '');
+  const { valueFor } = usePayers();
+  const [paidBy, setPaidBy] = useState<string | undefined>(initial ? initial.paidBy : valueFor('me'));
   const cat = getCategory(category);
   const color = isDark ? cat.dark : cat.light;
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (amount <= 0 || !date) return;
-    onSave({ date, title: title.trim() || cat.label, amount, category, note: note.trim() || undefined });
+    onSave({ date, title: title.trim() || cat.label, amount, category, note: note.trim() || undefined, paidBy });
   };
 
   return (
@@ -246,10 +250,10 @@ const ExpenseModal: React.FC<{
               <input
                 autoFocus
                 inputMode="numeric"
-                value={amount ? amount.toLocaleString('vi-VN') : ''}
-                onChange={(e) => setAmount(Number(e.target.value.replace(/\D/g, '')) || 0)}
+                value={amount ? digitsToGrouped(String(amount)).text : ''}
+                onChange={(e) => setAmount(digitsToGrouped(e.target.value).value)}
                 placeholder="0"
-                className="w-full bg-transparent border-0 p-0 focus:ring-0 text-3xl font-extrabold text-zinc-900 dark:text-white tabular-nums placeholder:text-zinc-300"
+                className="w-full bg-transparent border-0 p-0 outline-none focus:outline-none focus:ring-0 text-3xl font-extrabold text-zinc-900 dark:text-white tabular-nums placeholder:text-zinc-300"
               />
               <span className="text-xl font-extrabold text-zinc-400">đ</span>
             </div>
@@ -317,6 +321,8 @@ const ExpenseModal: React.FC<{
               <DateInputVN value={date} onChange={setDate} showFormatHint={false} inputClassName="!py-2.5 !rounded-xl !bg-zinc-100 dark:!bg-zinc-800 !border-0 font-semibold" />
             </div>
           </div>
+
+          <PayerPicker value={paidBy} onChange={setPaidBy} label="Ai trả khoản này?" />
 
           <div>
             <label className="block text-xs font-bold text-zinc-600 dark:text-zinc-300 mb-1">Ghi chú (không bắt buộc)</label>
@@ -609,6 +615,8 @@ export const ExpensesView: React.FC = () => {
                 <TrendChart kind={kind} rows={rows} period={period} isDark={isDark} />
               )}
 
+              <PayerSummary items={rows} className="mt-4" />
+
               {/* legend: the categories on screen, in the same fixed order as the stacks */}
               <div className="flex flex-wrap gap-x-3 gap-y-1.5 mt-4 pt-3 border-t border-zinc-100 dark:border-zinc-800">
                 {parts.map((p) => (
@@ -662,6 +670,7 @@ export const ExpensesView: React.FC = () => {
                                 {r.note && <span className="truncate">· {r.note}</span>}
                               </p>
                               <div className="mt-1 flex flex-wrap gap-1">
+                                <PayerChip paidBy={r.paidBy} />
                                 {r.source === 'plan' ? (
                                   <span className="px-2 py-0.5 rounded-full bg-sky-100 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 text-[10px] font-bold">
                                     {r.planEmoji || '✈️'} Từ kế hoạch: {r.planTitle}

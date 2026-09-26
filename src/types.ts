@@ -235,6 +235,7 @@ export interface PlanStop {
   reviewUrl?: string;
   alts?: PlanStopAlt[]; // backup options for this activity
   activeAltId?: string; // ticked backup option; undefined = the main one above
+  paidBy?: PaidBy; // who paid for this activity
   done: boolean;
 }
 
@@ -259,7 +260,15 @@ export interface PlanExtraCost {
   id: string;
   label: string;
   amount?: number; // VND
+  paidBy?: PaidBy;
 }
+
+/**
+ * Who paid: a user id, 'split' for half each, or 'partner-of:<userId>' — "the other one", written
+ * before the partner's id was known. Stored by id rather than by name so it reads right from both
+ * phones: what is "me" on one is "the other one" on the other. See utils/payer.ts.
+ */
+export type PaidBy = string;
 
 export type PlanBlock =
   | { id: string; type: 'heading'; text: string }
@@ -301,6 +310,7 @@ export interface DatingExpense {
   amount: number; // VND
   category: ExpenseCategoryId;
   note?: string;
+  paidBy?: PaidBy;
   authorId: string;
   authorName: string;
   createdAt: number;

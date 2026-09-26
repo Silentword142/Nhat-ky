@@ -30,6 +30,8 @@ import { PlaceActions, PlacePickButton } from '../components/PlaceTools';
 import { safeUrl } from '../utils/maps';
 import { resolveStop, patchActiveOption } from '../utils/planStops';
 import { colName, displayValue, evaluateSheet, isErrorValue, parseNumber } from '../utils/sheet';
+import { digitsToGrouped, formatVND, groupThousands } from '../utils/money';
+import { PayerSelect, PayerSummary } from '../components/PayerPicker';
 
 // Leaflet is only downloaded when the itinerary map is actually shown.
 const PlanDayMap = React.lazy(() => import('../components/PlanDayMap'));
@@ -61,8 +63,6 @@ const DEFAULT_CHECKLIST = ['CMND / Căn cước', 'Sạc điện thoại & sạc
 
 const todayISO = () => new Date().toISOString().split('T')[0];
 
-const formatVND = (n: number) => `${Math.round(n).toLocaleString('vi-VN')}đ`;
-
 const parseMoney = (raw: string): number | undefined => {
   const digits = raw.replace(/[^\d]/g, '');
   return digits ? Number(digits) : undefined;
@@ -70,6 +70,13 @@ const parseMoney = (raw: string): number | undefined => {
 
 const dayMs = 24 * 60 * 60 * 1000;
 const toLocalMidnight = (iso: string) => new Date(`${iso}T00:00:00`).getTime();
+
+/** The calendar date `n` days after `iso` (local, by calendar day — never off by one across DST). */
+const addDaysISO = (iso: string, n: number) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(y, (m || 1) - 1, (d || 1) + n);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+};
 
 const getDuration = (plan: TripPlan) => {
   const start = toLocalMidnight(plan.startDate);
@@ -477,7 +484,7 @@ const CreatePlanModal: React.FC<{
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className={labelCls}>Ngân sách (VNĐ)</label>
-            <input inputMode="numeric" value={budget} onChange={(e) => setBudget(e.target.value)} placeholder="5.000.000" className={inputCls} />
+            <input inputMode="numeric" value={budget} onChange={(e) => setBudget(digitsToGrouped(e.target.value).text)} placeholder="5,000,000" className={inputCls} />
           </div>
           <div>
             <label className={labelCls}>Trạng thái</label>
@@ -742,7 +749,7 @@ const AltForm: React.FC<{ initial?: PlanStopAlt; onSubmit: (d: AltDraft) => void
     typeof initial?.lat === 'number' && typeof initial?.lng === 'number' ? { lat: initial.lat, lng: initial.lng } : null
   );
   const [reviewUrl, setReviewUrl] = useState(initial?.reviewUrl ?? '');
-  const [cost, setCost] = useState(initial?.cost ? String(initial.cost) : '');
+  const [cost, setCost] = useState(initial?.cost ? groupThousands(initial.cost) : '');
 
   return (
     <form
@@ -769,7 +776,16 @@ const AltForm: React.FC<{ initial?: PlanStopAlt; onSubmit: (d: AltDraft) => void
       </div>
       <div className="grid grid-cols-[minmax(0,1fr)_120px] gap-2">
         <input value={reviewUrl} onChange={(e) => setReviewUrl(e.target.value)} placeholder="Link review quán" inputMode="url" className={inputCls} />
-        <input value={cost} onChange={(e) => setCost(e.target.value)} placeholder="Chi phí (đ)" className={inputCls} />
+        <input
+          value={cost}
+          onChange={(e) => setCost(e.target.value)}
+          onBlur={() => {
+            const n = parseMoneyInput(cost);
+            if (n !== undefined) setCost(groupThousands(n));
+          }}
+          placeholder="Chi phí (đ)"
+          className={inputCls}
+        />
       </div>
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} className="px-3.5 py-1.5 rounded-xl bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-200 font-bold text-xs">
@@ -934,6 +950,24 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
   };
 
   // Visiting order (by time) — the same order and numbering the map uses.
+  // A day is added by moving the plan's end date: the header, the map, the cost sheet and Dating Fees
+  // all date their activities from start + day, so they stay in step with no extra bookkeeping.
+  const addDay = () => {
+    const next = days.length + 1;
+    onUpdate({ endDate: addDaysISO(plan.startDate, next - 1) });
+    setLastDay(next);
+    setMapDay(next);
+    soundService.playPop();
+  };
+  const lastDayNo = days[days.length - 1];
+  const canDropLastDay = days.length > 1 && !plan.stops.some((s) => s.day === lastDayNo);
+  const dropLastDay = () => {
+    if (!canDropLastDay) return;
+    onUpdate({ endDate: addDaysISO(plan.startDate, days.length - 2) });
+    setLastDay((d) => Math.min(d, days.length - 1));
+    setMapDay((d) => Math.min(d, days.length - 1));
+  };
+
   const stopsOfDay = (d: number) =>
     plan.stops.filter((s) => s.day === d).sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
 
@@ -974,6 +1008,11 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
                   Ngày {d}
                 </button>
                 <span className="text-[11px] text-zinc-400">{dateOfDay(d)}</span>
+                {d === lastDayNo && canDropLastDay && (
+                  <button type="button" onClick={dropLastDay} className="ml-auto text-[11px] font-semibold text-zinc-400 hover:text-red-500 transition" title="Bỏ ngày cuối (đang trống)">
+                    Bỏ ngày này
+                  </button>
+                )}
               </div>
               {stops.length === 0 ? (
                 <p className="text-xs text-zinc-400 pl-2 italic">Chưa có hoạt động nào.</p>
@@ -1042,6 +1081,15 @@ const ItineraryTab: React.FC<{ plan: TripPlan; duration: number; onUpdate: (u: P
             </div>
           );
         })}
+
+        <button
+          type="button"
+          onClick={addDay}
+          className="w-full py-2.5 rounded-2xl border-2 border-dashed border-rose-200 dark:border-rose-900/60 text-rose-500 dark:text-rose-300 text-xs font-extrabold hover:bg-rose-50 dark:hover:bg-rose-950/30 transition flex items-center justify-center gap-1.5"
+        >
+          <Plus className="w-3.5 h-3.5 stroke-[3px]" /> Thêm Ngày {days.length + 1}
+          <span className="font-semibold text-rose-400/80">· {formatDateVN(addDaysISO(plan.startDate, days.length))}</span>
+        </button>
       </div>
 
       <StopForm days={days} defaultDay={lastDay} submitLabel="Thêm" onSubmit={addStop} key={`add-${lastDay}`} />
@@ -1115,7 +1163,7 @@ const parseMoneyInput = (raw: string): number | undefined => {
 };
 
 const MoneyInput: React.FC<{ value?: number; onCommit: (v: number | undefined) => void; placeholder?: string; cell?: boolean; onFocusCell?: () => void }> = ({ value, onCommit, placeholder = '0', cell = false, onFocusCell }) => {
-  const fmt = (v?: number) => (v ? v.toLocaleString('vi-VN') : '');
+  const fmt = (v?: number) => (v ? groupThousands(v) : '');
   const [draft, setDraft] = useState(fmt(value));
   const [focused, setFocused] = useState(false);
   useEffect(() => {
@@ -1159,8 +1207,9 @@ interface SheetRow {
   extra?: PlanExtraCost;
 }
 
-const SHEET_COLS = ['Ngày', 'Giờ', 'Hoạt động', 'Địa điểm', 'Chi phí (đ)'];
+const SHEET_COLS = ['Ngày', 'Giờ', 'Hoạt động', 'Địa điểm', 'Chi phí (đ)', 'Người trả'];
 const COST_COL = 4; // column E
+const PAYER_COL = 5; // column F — a picker, not a number: sums only ever read column E
 
 /** Excel-style cost table: rows come from the itinerary; sums are real =SUM() formulas evaluated by the sheet engine. */
 const CostSheet: React.FC<{
@@ -1170,7 +1219,9 @@ const CostSheet: React.FC<{
   onExtraAmount: (id: string, amount?: number) => void;
   onExtraRemove: (id: string) => void;
   onExtraAdd: (label: string) => void;
-}> = ({ plan, onStopCost, onExtraLabel, onExtraAmount, onExtraRemove, onExtraAdd }) => {
+  onStopPayer: (id: string, paidBy?: string) => void;
+  onExtraPayer: (id: string, paidBy?: string) => void;
+}> = ({ plan, onStopCost, onExtraLabel, onExtraAmount, onExtraRemove, onExtraAdd, onStopPayer, onExtraPayer }) => {
   const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
   const [extraLabel, setExtraLabel] = useState('');
   const extras = plan.extraCosts || [];
@@ -1188,22 +1239,22 @@ const CostSheet: React.FC<{
       .sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'))
       .forEach((raw) => {
         const s = resolveStop(raw);
-        rows.push({ kind: 'stop', stop: raw, cells: [`Ngày ${d}`, s.time || '', s.title, s.place && !/^https?:/i.test(s.place) ? s.place : '', s.cost ? String(s.cost) : ''] });
+        rows.push({ kind: 'stop', stop: raw, cells: [`Ngày ${d}`, s.time || '', s.title, s.place && !/^https?:/i.test(s.place) ? s.place : '', s.cost ? String(s.cost) : '', ''] });
       });
     const last = rowNo() - 1;
     sumRows.push(rowNo());
-    rows.push({ kind: 'daysum', cells: ['', '', `Cộng ngày ${d}`, '', `=SUM(${E(first)}:${E(last)})`] });
+    rows.push({ kind: 'daysum', cells: ['', '', `Cộng ngày ${d}`, '', `=SUM(${E(first)}:${E(last)})`, ''] });
   }
 
-  rows.push({ kind: 'section', cells: ['', '', 'CHI PHÍ KHÁC', '', ''] });
+  rows.push({ kind: 'section', cells: ['', '', 'CHI PHÍ KHÁC', '', '', ''] });
   if (extras.length > 0) {
     const first = rowNo();
-    extras.forEach((x) => rows.push({ kind: 'extra', extra: x, cells: ['', '', x.label, '', x.amount ? String(x.amount) : ''] }));
+    extras.forEach((x) => rows.push({ kind: 'extra', extra: x, cells: ['', '', x.label, '', x.amount ? String(x.amount) : '', ''] }));
     const last = rowNo() - 1;
     sumRows.push(rowNo());
-    rows.push({ kind: 'extrasum', cells: ['', '', 'Cộng chi phí khác', '', `=SUM(${E(first)}:${E(last)})`] });
+    rows.push({ kind: 'extrasum', cells: ['', '', 'Cộng chi phí khác', '', `=SUM(${E(first)}:${E(last)})`, ''] });
   }
-  rows.push({ kind: 'total', cells: ['', '', 'TỔNG CỘNG', '', sumRows.length ? `=${sumRows.map(E).join('+')}` : '=0'] });
+  rows.push({ kind: 'total', cells: ['', '', 'TỔNG CỘNG', '', sumRows.length ? `=${sumRows.map(E).join('+')}` : '=0', ''] });
 
   const values = evaluateSheet(rows.map((r) => r.cells));
   const selCell = selected ? rows[selected.r]?.cells[selected.c] : undefined;
@@ -1239,7 +1290,7 @@ const CostSheet: React.FC<{
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-zinc-300 dark:border-zinc-600">
-        <table className="w-full border-collapse text-sm min-w-[560px]">
+        <table className="w-full border-collapse text-sm min-w-[680px]">
           <thead>
             <tr className="bg-zinc-100 dark:bg-zinc-800 text-[10px] font-bold text-zinc-400">
               <th className="w-9 border-r border-zinc-200 dark:border-zinc-700" />
@@ -1275,6 +1326,18 @@ const CostSheet: React.FC<{
                     const isSel = selected?.r === r && selected?.c === c;
                     const ring = isSel ? 'outline outline-2 -outline-offset-2 outline-rose-400' : '';
 
+                    if (c === PAYER_COL && (row.kind === 'stop' || row.kind === 'extra')) {
+                      const paidBy = row.kind === 'stop' ? row.stop?.paidBy : row.extra?.paidBy;
+                      return (
+                        <td key={c} className={`${cell} p-0 w-[128px] ${ring}`} onClick={pick}>
+                          <PayerSelect
+                            value={paidBy}
+                            onChange={(next) => (row.kind === 'stop' ? onStopPayer(row.stop!.id, next) : onExtraPayer(row.extra!.id, next))}
+                            className="px-2 py-2"
+                          />
+                        </td>
+                      );
+                    }
                     if (row.kind === 'stop' && isCost && row.stop) {
                       return (
                         <td key={c} className={`${cell} p-0 ${ring}`} onClick={pick}>
@@ -1350,8 +1413,13 @@ const CostTab: React.FC<{ plan: TripPlan; onUpdate: (u: Partial<TripPlan>) => vo
   const pct = plan.budget ? Math.min(100, Math.round((total / plan.budget) * 100)) : 0;
   const over = plan.budget ? total > plan.budget : false;
 
-  // Cost belongs to whichever option is currently ticked for that activity.
+  // Cost belongs to whichever option is currently ticked for that activity; who paid belongs to the activity.
   const setStopCost = (id: string, cost?: number) => onUpdate({ stops: plan.stops.map((s) => (s.id === id ? patchActiveOption(s, { cost }) : s)) });
+  const setStopPayer = (id: string, paidBy?: string) => onUpdate({ stops: plan.stops.map((s) => (s.id === id ? { ...s, paidBy } : s)) });
+  const payments = [
+    ...plan.stops.map((s) => ({ amount: resolveStop(s).cost || 0, paidBy: s.paidBy })),
+    ...extras.map((x) => ({ amount: x.amount || 0, paidBy: x.paidBy })),
+  ];
   const setExtra = (id: string, updates: Partial<PlanExtraCost>) => onUpdate({ extraCosts: extras.map((x) => (x.id === id ? { ...x, ...updates } : x)) });
 
   // Plans made before this tab existed keep their plain notes / blocks; show them as content blocks.
@@ -1381,6 +1449,7 @@ const CostTab: React.FC<{ plan: TripPlan; onUpdate: (u: Partial<TripPlan>) => vo
             </p>
           </div>
         ) : null}
+        <PayerSummary items={payments} className="!bg-white/80 dark:!bg-zinc-800/70" />
         <div className="grid grid-cols-3 gap-2 text-center">
           {[
             { label: 'Hoạt động', value: stopsTotal },
@@ -1406,6 +1475,8 @@ const CostTab: React.FC<{ plan: TripPlan; onUpdate: (u: Partial<TripPlan>) => vo
           onUpdate({ extraCosts: [...extras, { id: newId('cost'), label }] });
           soundService.playPop();
         }}
+        onStopPayer={setStopPayer}
+        onExtraPayer={(id, paidBy) => setExtra(id, { paidBy })}
       />
 
       {/* Free-form notes, checklists, formula tables and option comparisons */}

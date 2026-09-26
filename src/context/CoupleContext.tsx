@@ -60,6 +60,8 @@ export interface CoupleContextType {
   anniversaries: AnniversaryEvent[];
   plans: TripPlan[];
   datingExpenses: DatingExpense[];
+  /** This device's user id — what "me" is when reading who paid for something. */
+  myUserId: string;
   isPartnerOnline: boolean;
   isPartnerTyping: boolean;
   incomingHeartbeat: HeartbeatPulse | null;
@@ -2334,6 +2336,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         anniversaries,
         plans,
         datingExpenses,
+        myUserId,
         isPartnerOnline,
         isPartnerTyping,
         incomingHeartbeat,
