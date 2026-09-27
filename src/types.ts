@@ -317,6 +317,23 @@ export interface DatingExpense {
   updatedAt: number;
 }
 
+/** Pastel "sticky note" colours a calendar note can wear. */
+export type NoteColor = 'pink' | 'yellow' | 'mint' | 'sky' | 'lavender' | 'peach';
+
+/** A note pinned to a calendar day, with a sticker that marks the day on the calendar. Shared by both partners. */
+export interface CalendarNote {
+  id: string;
+  date: string; // YYYY-MM-DD
+  text: string;
+  sticker: string; // an emoji from utils/stickers
+  color?: NoteColor;
+  time?: string; // HH:mm, optional
+  authorId: string;
+  authorName: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface HeartbeatPulse {
   senderId: string;
   senderName: string;
@@ -348,6 +365,7 @@ export interface CoupleFullState {
   anniversaries: AnniversaryEvent[];
   plans?: TripPlan[];
   datingExpenses?: DatingExpense[];
+  calendarNotes?: CalendarNote[];
   playlist?: MusicTrack[];
   albums?: Album[];
 }

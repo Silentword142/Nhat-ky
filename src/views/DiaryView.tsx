@@ -34,6 +34,7 @@ import { CycleTrackerModal } from '../components/CycleTrackerModal';
 import { getDayCycleInfo } from '../utils/cycle';
 import { formatDateVN } from '../utils/date';
 import { consumeDiaryDate, onDiaryDateRequest } from '../utils/diaryFocus';
+import { CalendarNotes, noteMarkersByDate } from '../components/CalendarNotes';
 
 const MOODS = [
   { emoji: '🥰', label: 'Hạnh phúc' },
@@ -95,7 +96,11 @@ export const DiaryView: React.FC = () => {
     addDiaryReaction,
     updateSettings,
     sendHeartbeat,
+    calendarNotes = [],
   } = useCouple();
+
+  // Each day's note sticker, to mark it on the calendar.
+  const noteMarkers = useMemo(() => noteMarkersByDate(calendarNotes), [calendarNotes]);
 
   const currentTheme = THEMES[settings?.theme] || THEMES.sakura;
 
@@ -1043,10 +1048,12 @@ export const DiaryView: React.FC = () => {
                 const isPeriodDay = isFloEnabled && item.isPeriod;
                 const isOvulationDay = isFloEnabled && item.isOvulation;
                 const isFertileDay = isFloEnabled && item.isFertile;
+                const marker = noteMarkers.get(item.dateStr);
 
                 return (
                   <button
                     key={item.dateStr}
+                    title={marker?.preview}
                     onClick={() => {
                       if (item.dateStr) {
                         soundService.playPaperOpen();
@@ -1066,6 +1073,13 @@ export const DiaryView: React.FC = () => {
                     } ${!item.isSelected && item.hasDiary ? 'ring-2 ring-rose-400 dark:ring-rose-500 ring-offset-1 dark:ring-offset-zinc-900' : ''}`}
                   >
                     <span className="text-xs leading-none">{item.dayNumber}</span>
+
+                    {marker && (
+                      <span className="absolute -top-2 -right-1.5 z-20 flex items-start leading-none pointer-events-none drop-shadow-sm" aria-label={`${marker.count} ghi chú`}>
+                        <span className="text-[14px] rotate-[10deg] inline-block">{marker.sticker}</span>
+                        {marker.count > 1 && <span className="-ml-1 mt-2 px-1 rounded-full bg-amber-400 text-white text-[8px] font-extrabold">{marker.count}</span>}
+                      </span>
+                    )}
 
                     {/* Indicators Bar */}
                     <div className="flex items-center gap-0.5 mt-0.5">
@@ -1129,7 +1143,14 @@ export const DiaryView: React.FC = () => {
                 <span className="w-1.5 h-1.5 rounded-full bg-rose-500 inline-block" />
                 <span>Nhật ký</span>
               </span>
+              <span className="flex items-center gap-1">
+                <span>🎀</span>
+                <span>Ghi chú</span>
+              </span>
             </div>
+
+            {/* The tapped day's notes */}
+            <CalendarNotes key={selectedDate} date={selectedDate} />
 
             {/* Selected Date Summary & Quick Delete Option */}
             <div className="pt-3 border-t border-rose-100 dark:border-zinc-800 flex items-center justify-between text-xs">
