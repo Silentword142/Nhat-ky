@@ -17,6 +17,7 @@ export const Header: React.FC = () => {
     daysInLove,
     isPartnerOnline,
     syncStatus,
+    syncError,
     sendHeartbeat,
     updateSettings,
     isGoogleDriveConnected,
@@ -92,7 +93,17 @@ export const Header: React.FC = () => {
               <span className="font-bold text-[10px] uppercase tracking-wider">AES-256</span>
             </div>
 
-            {/* Sync connection status */}
+            {/* Sync connection status — a refused save is shown here instead of failing silently */}
+            {syncError && (
+              <div
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-bold text-[11px] bg-red-500/10 text-red-600 dark:text-red-400 border border-red-200/60 dark:border-red-800/50 max-w-full"
+                title={syncError}
+                role="status"
+              >
+                <WifiOff className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Chưa lưu lên mây — đang giữ trên máy, sẽ tự gửi lại</span>
+              </div>
+            )}
             <div
               className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-medium text-[11px] ${
                 syncStatus === 'connected'

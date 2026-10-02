@@ -28,6 +28,9 @@ import { initAuth, googleSignIn, googleLogout } from '../services/googleAuth';
 import { findOrCreateAppFolder, APP_FOLDER_NAME } from '../services/googleDrive';
 import { User } from 'firebase/auth';
 import { db, doc, setDoc, getDoc, onSnapshot } from '../services/firebase';
+import { runTransaction } from 'firebase/firestore';
+import { getItemTimestamp, mergeCollections, mergeIncoming, readTombstones, Tombstones } from '../utils/syncMerge';
+import { offloadInlineImages, resolveImageRefs } from '../services/blobStore';
 import {
   getCurrentAuthUser,
   getStoredWebAccounts,
@@ -68,6 +71,8 @@ export interface CoupleContextType {
   isPartnerTyping: boolean;
   incomingHeartbeat: HeartbeatPulse | null;
   syncStatus: 'connected' | 'connecting' | 'offline';
+  /** Why the last save didn't reach the cloud (null when all is well). Data stays on this device meanwhile. */
+  syncError: string | null;
   lastSyncedAt: number | null;
   daysInLove: number;
   partnerAccountInfo: { username?: string; displayName?: string; birthday?: string } | null;
@@ -181,99 +186,39 @@ const stripPersonalSettings = <T extends Record<string, unknown>>(settings: T): 
   return shared;
 };
 
-// Firestore documents are capped at 1MiB. Inline base64 image data (data: URLs) from an
-// unsynced ORIGINAL-quality photo (photos are meant to go to Google Drive instead — see
-// PhotoAlbumView) can blow past that instantly and silently break realtime sync for the
-// *entire* room (Firestore rejects the whole write). This strips any long inline data: URL out
-// of the payload right before it is sent to Firestore — the full-quality version keeps living
-// in localStorage on this device.
-//
-// Avatars and handwritten-card drawings are NOT routed through Drive (by design — only Photo
-// Album uploads are) and are expected to sync through Firestore directly as base64, so the
-// threshold has to comfortably fit those: compressImageFile() (used for avatars) caps images at
-// 320x320 JPEG @ 85%, which lands well under 200KB as a data: URL. 250,000 chars (~180KB raw)
-// passes any normal compressed avatar/card through untouched while still catching an
-// accidentally-huge or uncompressed image blob before it can break the room's sync.
-const MAX_INLINE_DATA_URL_LENGTH = 250_000;
-function stripHeavyInlineDataForCloudSync<T>(value: T): T {
-  if (typeof value === 'string') {
-    if (value.startsWith('data:') && value.length > MAX_INLINE_DATA_URL_LENGTH) {
-      return '' as unknown as T;
-    }
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => stripHeavyInlineDataForCloudSync(item)) as unknown as T;
-  }
-  if (value && typeof value === 'object') {
-    const out: Record<string, any> = {};
-    for (const key of Object.keys(value as Record<string, any>)) {
-      out[key] = stripHeavyInlineDataForCloudSync((value as Record<string, any>)[key]);
-    }
-    return out as T;
-  }
-  return value;
-}
+/** Shared collections of the room — merged item by item, never overwritten as a whole (see utils/syncMerge). */
+const COLLECTION_KEYS = ['diaries', 'photos', 'cards', 'anniversaries', 'plans', 'datingExpenses', 'calendarNotes'] as const;
+type CollectionKey = (typeof COLLECTION_KEYS)[number];
 
-// Robust helper to extract timestamp from any item (date string, timestamp, createdAt, updatedAt, etc.)
-export function getItemTimestamp(item: any): number {
-  if (!item) return 0;
-  if (typeof item.updatedAt === 'number' && !isNaN(item.updatedAt) && item.updatedAt > 0) return item.updatedAt;
-  if (typeof item.createdAt === 'number' && !isNaN(item.createdAt) && item.createdAt > 0) return item.createdAt;
-  if (typeof item.timestamp === 'number' && !isNaN(item.timestamp) && item.timestamp > 0) return item.timestamp;
-  if (typeof item.sentAt === 'number' && !isNaN(item.sentAt) && item.sentAt > 0) return item.sentAt;
-  if (typeof item.date === 'number' && !isNaN(item.date) && item.date > 0) return item.date;
-  if (typeof item.date === 'string' && item.date) {
-    const t = new Date(item.date).getTime();
-    if (!isNaN(t) && t > 0) return t;
-  }
-  return 0;
-}
+/** Items written in the last week are the ones that may never have made it to the cloud (see bootCache below). */
+const RECENT_RESCUE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * Authoritative Remote Merge:
- * Always prioritizes incoming cloud/server data as the true source of truth.
- * Only adds local items if they were freshly created/updated in this active session
- * and strictly newer than the remote state. Stale device cache is never allowed to overwrite remote data.
+ * What this device had cached when the app started: which room it belonged to, every item id, and
+ * the recently written ones. Seeds the "seen in the cloud" set the first time this version opens a
+ * room — see confirmedFor() in the provider.
  */
-export function mergeWithAuthoritativeRemote<T extends { id?: string }>(
-  localList: T[] = [],
-  remoteList: T[] = [],
-  deletedIds: string[] = [],
-  hasLocalMutation: boolean = false,
-  remoteUpdatedAt: number = 0
-): T[] {
-  const deletedSet = new Set(deletedIds || []);
-  const map = new Map<string, T>();
-
-  // 1. Authoritative Remote items always take priority
-  for (const item of remoteList) {
-    if (item && item.id && !deletedSet.has(item.id)) {
-      map.set(item.id, item);
-    }
-  }
-
-  // 2. Only if the user performed a local mutation in this active session, preserve new/modified items
-  if (hasLocalMutation) {
-    for (const item of localList) {
-      if (!item || !item.id || deletedSet.has(item.id)) continue;
-      const existing = map.get(item.id);
-      const localTime = getItemTimestamp(item);
-      if (!existing) {
-        if (localTime >= remoteUpdatedAt) {
-          map.set(item.id, item);
-        }
-      } else {
-        const remoteTime = getItemTimestamp(existing);
-        if (localTime > remoteTime) {
-          map.set(item.id, { ...existing, ...item });
-        }
+const readBootCache = () => {
+  const ids = new Set<string>();
+  const recent = new Set<string>();
+  let room = '';
+  try {
+    room = String(JSON.parse(localStorage.getItem(`${STORAGE_KEY_PREFIX}settings`) || '{}').roomCode || '').toUpperCase().trim();
+  } catch {}
+  const now = Date.now();
+  for (const key of COLLECTION_KEYS) {
+    try {
+      const list = JSON.parse(localStorage.getItem(`${STORAGE_KEY_PREFIX}${key}`) || '[]');
+      if (!Array.isArray(list)) continue;
+      for (const item of list) {
+        if (!item || typeof item.id !== 'string') continue;
+        ids.add(item.id);
+        if (now - getItemTimestamp(item) < RECENT_RESCUE_MS) recent.add(item.id);
       }
-    }
+    } catch {}
   }
-
-  return Array.from(map.values());
-}
+  return { room, ids, recent };
+};
 
 /**
  * Shared tombstone helper for the whole-array-overwrite sync paths (playlist, albums — anything
@@ -581,6 +526,17 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   myProfileRef.current = myProfile;
   const hasUserMutatedRef = useRef<boolean>(false);
 
+  // ---- Safe sync bookkeeping (see utils/syncMerge.ts for the rules) ----
+  const [bootCache] = useState(readBootCache);
+  /** Ids this device has seen in the cloud, per room: only those may disappear without a tombstone. */
+  const confirmedRef = useRef<{ room: string; ids: Set<string> } | null>(null);
+  /** Collections holding items the cloud lacks; uploaded by the self-heal below. */
+  const pendingPushRef = useRef<Set<CollectionKey>>(new Set());
+  const pushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pushFailuresRef = useRef(0);
+  /** Set when the cloud refused a save — shown in the header instead of failing silently. */
+  const [syncError, setSyncError] = useState<string | null>(null);
+
   // Google Drive Cloud State
   const [googleUser, setGoogleUser] = useState<User | any>(() => {
     if (typeof window !== 'undefined') {
@@ -714,6 +670,69 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   }, []);
 
+  const roomRef = useRef('');
+  roomRef.current = (settings.roomCode || '').toUpperCase().trim();
+  const latestCollectionsRef = useRef<Record<CollectionKey, any[]>>({} as Record<CollectionKey, any[]>);
+  latestCollectionsRef.current = { diaries, photos, cards, anniversaries, plans, datingExpenses, calendarNotes };
+  const broadcastRef = useRef<((partialDoc: Record<string, any>) => void) | null>(null);
+
+  /** The ids this device has seen in the cloud for `room`. */
+  const confirmedFor = (room: string): Set<string> => {
+    if (confirmedRef.current?.room === room) return confirmedRef.current.ids;
+    let ids: Set<string> | null = null;
+    try {
+      const saved = localStorage.getItem(`${STORAGE_KEY_PREFIX}confirmed_${room}`);
+      if (saved) ids = new Set<string>(JSON.parse(saved));
+    } catch {}
+    if (!ids) {
+      // First time this version opens the room. Under the old sync the cache was a copy of the
+      // cloud, so what it holds counts as seen there — except the last week's writes when the
+      // cache is this very room's: those may be exactly the pages that never got uploaded, so
+      // they are kept and uploaded rather than written off.
+      ids = new Set(bootCache.ids);
+      if (bootCache.room === room) bootCache.recent.forEach((id) => ids!.delete(id));
+    }
+    confirmedRef.current = { room, ids };
+    return ids;
+  };
+
+  const persistConfirmed = () => {
+    const c = confirmedRef.current;
+    if (!c) return;
+    try {
+      localStorage.setItem(`${STORAGE_KEY_PREFIX}confirmed_${c.room}`, JSON.stringify(Array.from(c.ids)));
+    } catch {}
+  };
+
+  /** The cloud's copy of one collection merged into this device's — nothing undeleted is ever dropped. */
+  const mergeFromCloud = <T,>(key: CollectionKey, local: T[], remote: T[], tombstones: Tombstones): T[] => {
+    const confirmed = confirmedFor(roomRef.current);
+    const result = mergeIncoming(local, remote, tombstones, confirmed);
+    result.remoteIds.forEach((id) => confirmed.add(id));
+    if (result.unsynced.length > 0) pendingPushRef.current.add(key);
+    return result.merged;
+  };
+
+  /**
+   * Self-heal: anything this device holds that the cloud lacks (a save that failed, or one the
+   * other phone overwrote before the merge-on-write existed) is uploaded again, merged in safely.
+   * Backs off while saves keep failing so a full or offline room isn't hammered.
+   */
+  const scheduleSelfHeal = () => {
+    if (pushTimerRef.current) return;
+    const delay = Math.min(60_000, 2_000 * 2 ** pushFailuresRef.current);
+    pushTimerRef.current = setTimeout(() => {
+      pushTimerRef.current = null;
+      persistConfirmed();
+      const keys: CollectionKey[] = Array.from(pendingPushRef.current) as CollectionKey[];
+      pendingPushRef.current.clear();
+      if (keys.length === 0 || !broadcastRef.current) return;
+      const payload: Record<string, any> = {};
+      keys.forEach((k) => (payload[k] = latestCollectionsRef.current[k]));
+      broadcastRef.current(payload);
+    }, delay);
+  };
+
   // Helper to apply incoming cloud/server data cleanly
   const applyIncomingRoomData = useCallback(
     (data: any, source: string) => {
@@ -733,18 +752,13 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return;
       }
 
-      const deletedIds = Array.isArray(data.deletedItemIds) ? data.deletedItemIds : [];
+      // Every deletion the room knows about (durable tombstones + the older single-field markers).
+      const tombstones = readTombstones(data);
 
       // 1. Sync Diaries with authoritative remote merge
       if (Array.isArray(data.diaries)) {
         setDiaries((prev) => {
-          const merged = mergeWithAuthoritativeRemote<DiaryEntry>(
-            prev,
-            data.diaries,
-            deletedIds,
-            hasUserMutatedRef.current,
-            data.updatedAt || 0
-          );
+          const merged = mergeFromCloud<DiaryEntry>('diaries', prev, data.diaries, tombstones);
           merged.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
           try {
             localStorage.setItem(`${STORAGE_KEY_PREFIX}diaries`, JSON.stringify(merged));
@@ -756,13 +770,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // 2. Sync Photos with authoritative remote merge
       if (Array.isArray(data.photos)) {
         setPhotos((prev) => {
-          const merged = mergeWithAuthoritativeRemote<PhotoMemory>(
-            prev,
-            data.photos,
-            deletedIds,
-            hasUserMutatedRef.current,
-            data.updatedAt || 0
-          );
+          const merged = mergeFromCloud<PhotoMemory>('photos', prev, data.photos, tombstones);
           merged.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
           try {
             localStorage.setItem(`${STORAGE_KEY_PREFIX}photos`, JSON.stringify(merged));
@@ -774,13 +782,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // 3. Sync Cards with authoritative remote merge
       if (Array.isArray(data.cards)) {
         setCards((prev) => {
-          const merged = mergeWithAuthoritativeRemote<HandwrittenCard>(
-            prev,
-            data.cards,
-            deletedIds,
-            hasUserMutatedRef.current,
-            data.updatedAt || 0
-          );
+          const merged = mergeFromCloud<HandwrittenCard>('cards', prev, data.cards, tombstones);
           merged.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
           try {
             localStorage.setItem(`${STORAGE_KEY_PREFIX}cards`, JSON.stringify(merged));
@@ -792,13 +794,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // 4. Sync Anniversaries with authoritative remote merge
       if (Array.isArray(data.anniversaries)) {
         setAnniversaries((prev) => {
-          const merged = mergeWithAuthoritativeRemote<AnniversaryEvent>(
-            prev,
-            data.anniversaries,
-            deletedIds,
-            hasUserMutatedRef.current,
-            data.updatedAt || 0
-          );
+          const merged = mergeFromCloud<AnniversaryEvent>('anniversaries', prev, data.anniversaries, tombstones);
           try {
             localStorage.setItem(`${STORAGE_KEY_PREFIX}anniversaries`, JSON.stringify(merged));
           } catch {}
@@ -809,13 +805,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // 4a. Sync trip / date plans
       if (Array.isArray(data.plans)) {
         setPlans((prev) => {
-          const merged = mergeWithAuthoritativeRemote<TripPlan>(
-            prev,
-            data.plans,
-            deletedIds,
-            hasUserMutatedRef.current,
-            data.updatedAt || 0
-          );
+          const merged = mergeFromCloud<TripPlan>('plans', prev, data.plans, tombstones);
           try {
             localStorage.setItem(`${STORAGE_KEY_PREFIX}plans`, JSON.stringify(merged));
           } catch {}
@@ -826,13 +816,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // 4a'. Sync Dating Fees
       if (Array.isArray(data.datingExpenses)) {
         setDatingExpenses((prev) => {
-          const merged = mergeWithAuthoritativeRemote<DatingExpense>(
-            prev,
-            data.datingExpenses,
-            deletedIds,
-            hasUserMutatedRef.current,
-            data.updatedAt || 0
-          );
+          const merged = mergeFromCloud<DatingExpense>('datingExpenses', prev, data.datingExpenses, tombstones);
           try {
             localStorage.setItem(`${STORAGE_KEY_PREFIX}datingExpenses`, JSON.stringify(merged));
           } catch {}
@@ -843,13 +827,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // 4a''. Sync calendar notes
       if (Array.isArray(data.calendarNotes)) {
         setCalendarNotes((prev) => {
-          const merged = mergeWithAuthoritativeRemote<CalendarNote>(
-            prev,
-            data.calendarNotes,
-            deletedIds,
-            hasUserMutatedRef.current,
-            data.updatedAt || 0
-          );
+          const merged = mergeFromCloud<CalendarNote>('calendarNotes', prev, data.calendarNotes, tombstones);
           try {
             localStorage.setItem(`${STORAGE_KEY_PREFIX}calendarNotes`, JSON.stringify(merged));
           } catch {}
@@ -969,8 +947,21 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       setLastSyncedAt(data.updatedAt || Date.now());
       setSyncStatus('connected');
+      scheduleSelfHeal();
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [myUserId, settings.roomCode]
+  );
+
+  /** Incoming room data with its image references resolved back into images, then applied. */
+  const ingestRoomData = useCallback(
+    (data: any, source: string) => {
+      if (!data) return;
+      resolveImageRefs(data, roomRef.current)
+        .then((resolved) => applyIncomingRoomData(resolved, source))
+        .catch(() => applyIncomingRoomData(data, source));
+    },
+    [applyIncomingRoomData]
   );
 
   // Push updates to Firestore Cloud Real-time & Express REST Backend
@@ -998,16 +989,75 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         };
       }
 
-      // 1. Direct Firestore Cloud Broadcast (Enables 100% instant sync on GitHub Pages and static hosts)
-      try {
-        if (cleanRoom) {
-          const roomDocRef = doc(db, 'rooms', cleanRoom);
-          const firestoreSafePayload = stripHeavyInlineDataForCloudSync(payload);
-          setDoc(roomDocRef, firestoreSafePayload, { merge: true }).catch(() => {});
-          setSyncStatus('connected');
-          setLastSyncedAt(nowTime);
-        }
-      } catch (err) {}
+      // 1. Firestore (the live sync on GitHub Pages).
+      //
+      // Shared lists are never written as a whole any more: setDoc with a list REPLACES the list,
+      // so a phone holding a slightly stale copy used to erase whatever the other phone had just
+      // saved. Now a transaction reads the room's current lists and merges this phone's into them
+      // item by item (newest copy of each item wins, deleted ones stay deleted), then writes.
+      // Big inline images go to their own documents first (services/blobStore) so the room
+      // document stays well under Firestore's 1 MiB cap. A failed save is reported, not swallowed,
+      // and the self-heal retries it — the data meanwhile stays safe on this phone.
+      if (cleanRoom) {
+        const roomDocRef = doc(db, 'rooms', cleanRoom);
+        const collectionKeys = COLLECTION_KEYS.filter((k) => Array.isArray(payload[k]));
+        const newTombstones: Tombstones = {};
+        if (typeof payload.deletedId === 'string' && payload.deletedId) newTombstones[payload.deletedId] = nowTime;
+        if (Array.isArray(payload.deletedItemIds)) payload.deletedItemIds.forEach((id: unknown) => typeof id === 'string' && (newTombstones[id] = nowTime));
+        const touchesLists = collectionKeys.length > 0 || Object.keys(newTombstones).length > 0;
+
+        const write = async () => {
+          const safe = await offloadInlineImages(payload, cleanRoom);
+          if (!touchesLists) {
+            await setDoc(roomDocRef, safe, { merge: true });
+            return;
+          }
+          await runTransaction(db, async (tx) => {
+            const snap = await tx.get(roomDocRef);
+            const current: Record<string, any> = snap.exists() ? snap.data() : {};
+            const tombstones = { ...readTombstones(current), ...newTombstones };
+            const out: Record<string, any> = { ...safe };
+            for (const key of collectionKeys) out[key] = mergeCollections(current[key] || [], safe[key], tombstones);
+            if (Object.keys(newTombstones).length > 0) out.tombstones = newTombstones; // merged into the map, not replacing it
+            // Older app versions left big inline images all over the room document — maybe enough to
+            // have filled it. Move every one of them out now, including in lists and profiles this
+            // save doesn't touch, so this very write is the one that frees the room up again.
+            for (const key of COLLECTION_KEYS as readonly string[]) {
+              if (out[key] === undefined && current[key] !== undefined && JSON.stringify(current[key]).includes('data:')) out[key] = current[key];
+            }
+            if (current.profiles && JSON.stringify(current.profiles).includes('data:')) out.profiles = { ...current.profiles, ...(out.profiles || {}) };
+            tx.set(roomDocRef, await offloadInlineImages(out, cleanRoom), { merge: true });
+          });
+        };
+
+        // A transaction keeps retrying while the connection is down rather than failing, so say
+        // something if a save hasn't gone through after a few seconds — it will still finish later.
+        const slowNotice = setTimeout(
+          () => setSyncError('Chưa gửi được lên mây (mất mạng hoặc kết nối chập chờn). Bản mới vẫn đang được giữ trên máy này và sẽ tự gửi lại.'),
+          8000
+        );
+        write()
+          .finally(() => clearTimeout(slowNotice))
+          .then(() => {
+            pushFailuresRef.current = 0;
+            setSyncError(null);
+            setSyncStatus('connected');
+            setLastSyncedAt(nowTime);
+          })
+          .catch((err: any) => {
+            const text = `${err?.code || ''} ${err?.message || err}`;
+            console.warn('[SYNC] Cloud save failed — kept on this device, will retry:', text);
+            const tooBig = /maximum|exceed|too large|1048576|invalid-argument/i.test(text);
+            setSyncError(
+              tooBig
+                ? 'Dữ liệu của phòng đã chạm giới hạn 1MB của Firestore nên chưa lưu lên mây được. Bản mới vẫn đang được giữ an toàn trên máy này.'
+                : 'Chưa gửi được lên mây (mất mạng hoặc kết nối chập chờn). Bản mới vẫn đang được giữ trên máy này và sẽ tự gửi lại.'
+            );
+            collectionKeys.forEach((k) => pendingPushRef.current.add(k));
+            pushFailuresRef.current = Math.min(pushFailuresRef.current + 1, 5);
+            scheduleSelfHeal();
+          });
+      }
 
       // 2. Express Server Broadcast (if running in fullstack mode)
       try {
@@ -1025,13 +1075,15 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           setSyncStatus('connected');
           setLastSyncedAt(nowTime);
           if (result.room) {
-            applyIncomingRoomData(result.room, 'sync_ack');
+            ingestRoomData(result.room, 'sync_ack');
           }
         }
       } catch (e) {}
     },
-    [settings.roomCode, myUserId, applyIncomingRoomData]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [settings.roomCode, myUserId, ingestRoomData]
   );
+  broadcastRef.current = broadcastRoomChanges;
 
   // Deletes are tracked in removedPlaylistIdsRef for a short TTL only — see that ref's own
   // declaration for the full reasoning (an earlier permanent-tombstone version ended up
@@ -1098,7 +1150,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           if (!isMounted) return;
           if (docSnap.exists()) {
             const remoteData = docSnap.data();
-            applyIncomingRoomData(remoteData, 'firestore_realtime');
+            ingestRoomData(remoteData, 'firestore_realtime');
             setSyncStatus('connected');
             setLastSyncedAt(remoteData.updatedAt || Date.now());
           }
@@ -1131,7 +1183,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const data = await res.json().catch(() => null);
           if (isMounted && data && data.success) {
             if (data.exists && data.room) {
-              applyIncomingRoomData(data.room, 'express_rest');
+              ingestRoomData(data.room, 'express_rest');
             } else {
               setIsPartnerOnline(false);
               setIsPartnerTyping(false);
@@ -1165,7 +1217,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       try {
         const snap = await getDoc(doc(db, 'rooms', cleanRoom));
         if (isMounted && snap.exists()) {
-          applyIncomingRoomData(snap.data(), 'firestore_fallback_poll');
+          ingestRoomData(snap.data(), 'firestore_fallback_poll');
         }
       } catch (err) {
         console.warn('[Firestore] Fallback poll notice:', err);
@@ -1178,7 +1230,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (interval) clearInterval(interval);
       clearInterval(firestoreFallbackInterval);
     };
-  }, [isAuthenticated, settings.roomCode, applyIncomingRoomData]);
+  }, [isAuthenticated, settings.roomCode, ingestRoomData]);
 
 
   // Heartbeat presence ping (sent to Firestore & Express Server)
@@ -1188,15 +1240,19 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
 
     const cleanRoom = settings.roomCode.toUpperCase().trim();
-    const pingPresence = () => {
+    const pingPresence = async () => {
       const nowTime = Date.now();
       try {
         const roomDocRef = doc(db, 'rooms', cleanRoom);
-        // Avatars can be a raw base64 data: URL (e.g. a freshly cropped photo not yet uploaded
-        // anywhere) — writing that directly here (unlike broadcastRoomChanges) skipped the same
-        // size safeguard, risking pushing the room document over Firestore's 1MiB cap and
-        // silently breaking sync for the whole room, partner included.
-        const safeAvatar = stripHeavyInlineDataForCloudSync(myProfile.avatar);
+        // Avatars are often a raw base64 data: URL. Inline in the room document they eat into
+        // Firestore's 1MiB cap (and two of them every 20s), so they go through the image store
+        // like everything else; if that upload fails the ping just leaves the avatar out.
+        let safeAvatar: string | undefined;
+        try {
+          safeAvatar = await offloadInlineImages(myProfile.avatar, cleanRoom);
+        } catch {
+          safeAvatar = undefined;
+        }
         // IMPORTANT: setDoc (unlike updateDoc) does NOT treat a top-level key containing dots
         // ("profiles.<id>.lastActive") as a nested field path — it creates a literal field
         // whose *name* contains those dots. That silently broke partner pairing entirely: the
@@ -1336,7 +1392,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (cleanRoom) {
         const roomDocSnap = await getDoc(doc(db, 'rooms', cleanRoom));
         if (roomDocSnap.exists()) {
-          applyIncomingRoomData(roomDocSnap.data(), 'manual_sync_firestore');
+          ingestRoomData(roomDocSnap.data(), 'manual_sync_firestore');
           hasLoaded = true;
         }
       }
@@ -1348,7 +1404,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (res.ok) {
         const data = await res.json().catch(() => null);
         if (data && data.success && data.exists && data.room) {
-          applyIncomingRoomData(data.room, 'manual_sync_express');
+          ingestRoomData(data.room, 'manual_sync_express');
           hasLoaded = true;
         }
       }
@@ -1363,7 +1419,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     setSyncStatus('connected');
     return true;
-  }, [settings.roomCode, applyIncomingRoomData]);
+  }, [settings.roomCode, ingestRoomData]);
 
   // 4. Polling user account for automatic partner updates and partner room migrations
   useEffect(() => {
@@ -1456,12 +1512,12 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // at the new code — it never touches the room documents themselves. Without copying the
       // actual room content across, the new room starts completely empty on Firestore: the
       // partner (who always reads straight from Firestore) sees nothing migrate over, while the
-      // switching device itself still shows everything because mergeWithAuthoritativeRemote
-      // preserves its own in-memory cache — making it look like the migration worked when it
+      // switching device itself still shows everything because the sync merge keeps its own
+      // in-memory cache — making it look like the migration worked when it
       // silently didn't. Write this device's current room content into the new room doc first.
       try {
         const newRoomDocRef = doc(db, 'rooms', cleanCode);
-        const migratedPayload = stripHeavyInlineDataForCloudSync({
+        const migratedPayload = await offloadInlineImages({
           roomCode: cleanCode,
           diaries,
           photos,
@@ -1475,7 +1531,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             [myUserId]: { ...myProfileRef.current, id: myUserId, lastActive: Date.now() },
           },
           updatedAt: Date.now(),
-        });
+        }, cleanCode);
         await setDoc(newRoomDocRef, migratedPayload, { merge: true });
       } catch (err) {
         console.warn('Room data migration error:', err);
@@ -1526,10 +1582,12 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // 1b. Clear this device's local cache of the old room's content. The old room's data on
     // Firestore is untouched (nothing is deleted there), but without clearing local state here,
-    // mergeWithAuthoritativeRemote would keep showing the old room's diaries/photos/cards on this
+    // the sync merge would keep showing the old room's diaries/photos/cards on this
     // device even after switching to a brand-new, genuinely empty private room — and any new
     // mutation made from that stale view would leak the old room's data into the new one.
     hasUserMutatedRef.current = false;
+    pendingPushRef.current.clear();
+    confirmedRef.current = null;
     setDiaries([]);
     setPhotos([]);
     setCards([]);
@@ -2395,7 +2453,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       getDoc(doc(db, 'rooms', assignedRoom))
         .then((snap) => {
           if (snap.exists()) {
-            applyIncomingRoomData(snap.data(), 'login_init_firestore');
+            ingestRoomData(snap.data(), 'login_init_firestore');
           }
         })
         .catch(() => {});
@@ -2404,12 +2462,12 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         .then((res) => res.json())
         .then((data) => {
           if (data && data.success && data.room) {
-            applyIncomingRoomData(data.room, 'login_init_express');
+            ingestRoomData(data.room, 'login_init_express');
           }
         })
         .catch(() => {});
     },
-    [applyIncomingRoomData]
+    [ingestRoomData]
   );
 
   return (
@@ -2438,6 +2496,7 @@ export const CoupleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         isPartnerTyping,
         incomingHeartbeat,
         syncStatus,
+        syncError,
         lastSyncedAt,
         daysInLove,
         partnerAccountInfo,

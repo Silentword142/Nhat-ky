@@ -41,8 +41,8 @@ const WAX_SEALS = [
   { id: 'kiss', label: 'Nụ Hôn Ngọt Ngào', color: '#e11d48', emoji: '💋' },
 ];
 
-// The drawing layer is a transparent PNG synced through Firestore, which drops inline data URLs
-// over ~250k chars (see stripHeavyInlineDataForCloudSync) — keep the export comfortably below.
+// The drawing layer is a transparent PNG synced through Firestore as its own image document
+// (services/blobStore); keeping the export small keeps cards quick to load on the other phone.
 const CANVAS_W = 600;
 const CANVAS_H = 800;
 const MAX_DRAWING_DATA_URL = 230_000;

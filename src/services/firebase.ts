@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { initializeFirestore, getFirestore, doc, setDoc, getDoc, onSnapshot } from 'firebase/firestore';
+import { initializeFirestore, getFirestore, connectFirestoreEmulator, doc, setDoc, getDoc, onSnapshot } from 'firebase/firestore';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -34,6 +34,15 @@ try {
   firestoreInstance = configObj.firestoreDatabaseId
     ? getFirestore(app, configObj.firestoreDatabaseId)
     : getFirestore(app);
+}
+
+// Test builds only: VITE_FIRESTORE_EMULATOR=host:port points the app at a local Firestore emulator,
+// so sync can be exercised with two browsers without touching the real database. Never set for the
+// GitHub Pages build, so production always talks to the real project.
+const emulatorHost = (import.meta as any).env?.VITE_FIRESTORE_EMULATOR as string | undefined;
+if (emulatorHost) {
+  const [host, port] = emulatorHost.split(':');
+  connectFirestoreEmulator(firestoreInstance, host, Number(port));
 }
 
 export const db = firestoreInstance;
